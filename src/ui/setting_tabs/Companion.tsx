@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import { Badge, Code, Divider, Group, Paper, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
+import { Badge, Code, Divider, Group, Paper, SegmentedControl, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/tauri";
 import defaultPetConfig from "../../config/pet_config";
 import {
@@ -16,7 +16,9 @@ import {
 import { emitUpdatePetsEvent } from "../../utils/event";
 import { DispatchType } from "../../types/IEvents";
 
-const SWITCHES: { key: keyof ICompanionSettings; title: string; description: string }[] = [
+type SwitchKey = Exclude<keyof ICompanionSettings, "chattiness">;
+
+const SWITCHES: { key: SwitchKey; title: string; description: string }[] = [
     { key: "follow", title: "Follow the cursor 🐾", description: "Walks after your mouse (also Ctrl+Alt+F)" },
     { key: "lookAtCursor", title: "Look at the cursor 👀", description: "Turns and looks at your mouse when it's nearby" },
     { key: "randomActivities", title: "Random activities", description: "Every now and then naps, works, games, watches a movie or sits by itself" },
@@ -72,7 +74,7 @@ function Companion() {
         };
     }, []);
 
-    const toggle = (key: keyof ICompanionSettings, value: boolean) => {
+    const toggle = <K extends keyof ICompanionSettings>(key: K, value: ICompanionSettings[K]) => {
         const next = { ...settings, [key]: value };
         setSettings(next);
         saveCompanion(next);
@@ -97,6 +99,23 @@ function Companion() {
                         <Divider my="sm" />
                     </div>
                 ))}
+                <Group justify="space-between" wrap="nowrap">
+                    <div>
+                        <Text>Chattiness 💬</Text>
+                        <Text maw={460} fz="xs" c="dimmed">
+                            How often it says casual things. Replies, reminders and nudges always show.
+                        </Text>
+                    </div>
+                    <SegmentedControl
+                        data={[
+                            { value: "quiet", label: "Quiet" },
+                            { value: "normal", label: "Normal" },
+                            { value: "chatty", label: "Chatty" },
+                        ]}
+                        value={settings.chattiness}
+                        onChange={(v) => toggle("chattiness", v as ICompanionSettings["chattiness"])}
+                    />
+                </Group>
             </div>
 
             <Paper withBorder radius="md" p="md">

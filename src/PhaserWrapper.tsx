@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Phaser from "phaser";
 import Pets from "./scenes/Pets";
 import { useSettingStore } from "./hooks/useSettingStore";
@@ -20,9 +20,13 @@ function PhaserWrapper() {
 
     const [screenWidth, setScreenWidth] = useState(window.screen.width);
     const [screenHeight, setScreenHeight] = useState(window.screen.height);
+    // rebuild the game only when the pet list really changes (not on every new array)
+    const petsKey = useMemo(() => JSON.stringify(pets), [pets]);
 
     useEffect(() => {
         if (!phaserDom.current) return;
+        // nothing to show until the saved pets are loaded
+        if (pets.length === 0) return;
 
         const handleResize = () => {
             setScreenWidth(window.screen.width);
@@ -70,16 +74,22 @@ function PhaserWrapper() {
             }
         }
 
-        const game = new Phaser.Game(phaserConfig);
+        // create on the next tick: if this effect is cleaned up straight away
+        // (React dev mode mounts twice, or pets load right after), nothing is built twice
+        let game: Phaser.Game | null = null;
+        const start = setTimeout(() => {
+            game = new Phaser.Game(phaserConfig);
+        }, 0);
 
         return () => {
-            game.destroy(true);
+            clearTimeout(start);
+            game?.destroy(true);
             // reset the dom
             if (phaserDom.current !== null) phaserDom.current.innerHTML = '';
             window.removeEventListener("resize", handleResize);
         }
 
-    }, [pets, screenWidth, screenHeight]);
+    }, [petsKey, screenWidth, screenHeight]);
 
     return (
         <>

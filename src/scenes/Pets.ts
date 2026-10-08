@@ -20,6 +20,9 @@ import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortc
 import { invoke } from "@tauri-apps/api/tauri";
 import { createAvatarTexture, AVATAR_STATE_DEFS } from "./avatar";
 import {
+    appName,
+    loadFocusSessions,
+    saveFocusSessions,
     COMPANION_KEY,
     DEFAULT_APPS,
     DEFAULT_HOTKEYS,
@@ -65,6 +68,14 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     follow?: boolean;
     // focus-timer pill above the head
     timerPill?: Phaser.GameObjects.Container | null;
+    // the bubble on screen: its importance and when it goes away
+    bubblePriority?: number;
+    bubbleUntil?: number;
+    // last long activity, to avoid doing the same one twice in a row
+    lastActivity?: string;
+    // cursor-looking: what it wants to do and since how many checks (avoids flicker)
+    lookWant?: string;
+    lookWantCount?: number;
     nextParticleAt?: number;
     lastGreetAt?: number;
     downInfo?: { x: number; y: number; t: number };
@@ -122,6 +133,12 @@ export default class Pets extends Phaser.Scene {
     private readonly CLICK_REACTIONS: string[] = ["greet", "greet", "dance", "spin"];
     private readonly NOT_ON_GROUND_STATES: string[] = ["climb", "crawl", "drag", "jump", "fall"];
     private readonly BUBBLE_DURATION: number = 2600;
+    // bubble importance: casual chatter < normal replies < reminders & nudges
+    private readonly CASUAL = 0;
+    private readonly NORMAL = 1;
+    private readonly IMPORTANT = 2;
+    // chance that a casual bubble is shown, per chattiness setting
+    private readonly CHATTY: { [level: string]: number } = { quiet: 0.25, normal: 0.75, chatty: 1 };
 
     // defaults when an avatar's config doesn't say otherwise
     private readonly DEFAULT_PERSONALITY: Required<Omit<IAvatarPersonality, "bubble">> = {
@@ -160,8 +177,12 @@ export default class Pets extends Phaser.Scene {
     private nextVibeAt: number = 0;
     // focus timer
     private focus: { phase: "work" | "break" | null; endsAt: number; sessions: number } = {
-        phase: null, endsAt: 0, sessions: 0,
+        phase: null, endsAt: 0, sessions: loadFocusSessions(),
     };
+    // a reminder that wasn't acknowledged yet (click the pet): repeats a couple of times
+    private nagging: { text: string; left: number; nextAt: number } | null = null;
+    // when you went away (for "you were away 25 min")
+    private awaySince: number = 0;
     // next time each wellbeing nudge is due
     private nudgeDue: { [kind: string]: number } = {};
     private lastTick: number = 0;
@@ -197,9 +218,10 @@ export default class Pets extends Phaser.Scene {
         comforted: ["Thank you 🥹", "You're the best! 💖", "Hugs! 🤗"],
         away: ["Zzz… wake me when you're back 💤", "*yawn* I'll nap till you return"],
         welcomeBack: ["Welcome back! 👋", "You're back! 😊", "Missed you! 💖", "Good {time}! Welcome back ✨"],
-        autoLaptop: ["Coding together! 💻", "I'll work too ⌨️", "Let's get stuff done! 💪"],
-        autoMovie: ["Ooh, what are we watching? 🍿", "Movie buddy! 🎬", "Popcorn time! 🍿"],
-        autoGame: ["Can I play too? 🎮", "Game on! 🕹️", "Go go go! 🎮"],
+        autoLaptop: ["Working in {app} together! 💻", "I'll work too ⌨️ ({app})", "Let's get stuff done in {app}! 💪"],
+        autoMovie: ["Ooh, what are we watching on {app}? 🍿", "Movie buddy! 🎬", "Popcorn time! 🍿"],
+        autoGame: ["Can I play {app} too? 🎮", "Game on! 🕹️", "Go go go! 🎮"],
+        acknowledged: ["👍 Got it!", "Okay! ✅", "Noted! 👍"],
         song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
         followOn: ["I'll follow you! 🐾", "Lead the way! 🐾"],
         followOff: ["Okay, I'll hang out here 🙂", "Staying put! 🐾"],
@@ -298,7 +320,7 @@ export default class Pets extends Phaser.Scene {
         for (const kind of Object.keys(nudges)) this.nudgeDue[kind] = Date.now() + nudges[kind] * 60000;
         if (isBirthday()) {
             this.time.delayedCall(4000, () => this.forEachAvatar((pet) => {
-                this.showBubble(pet, this.pick(this.LINES.birthday), 5000);
+                this.showBubble(pet, this.pick(this.LINES.birthday), 5000, this.IMPORTANT);
                 this.playReaction(pet, "dance", true);
             }));
         }
@@ -1291,6 +1313,11 @@ export default class Pets extends Phaser.Scene {
     reactToClick(pet: Pet): void {
         // busy pets answer instead of dropping what they're doing
         this.lastInteraction = this.time.now;
+        if (this.nagging) {
+            this.nagging = null;
+            this.showBubble(pet, this.pick(this.LINES.acknowledged), this.BUBBLE_DURATION, this.IMPORTANT);
+            return;
+        }
         switch (pet.activity) {
             case "sleep":
                 if (pet.mode) {
@@ -1379,6 +1406,8 @@ export default class Pets extends Phaser.Scene {
             // long activities can be switched off; with music on it only grooves around
             .filter(([state]) => !p.durations[state] || (this.companion.randomActivities && !this.musicPlaying))
             .filter(([state]) => !this.musicPlaying || calm.includes(state))
+            // variety: not the same long activity twice in a row
+            .filter(([state]) => !p.durations[state] || state !== pet.lastActivity)
             .map(([state, weight]) => [state, state === "sleep" && night ? weight * p.nightSleepBoost : weight]);
         if (options.length === 0) return false;
 
@@ -1417,6 +1446,7 @@ export default class Pets extends Phaser.Scene {
         pet.pendingActivity = undefined;
         this.switchState(pet, state);
         pet.activity = state;
+        if (!mode) pet.lastActivity = state;
         pet.mode = mode;
         pet.activityUntil = mode ? Infinity : this.time.now + Phaser.Math.Between(min * 1000, max * 1000);
         pet.canPlayRandomState = false;
@@ -1425,7 +1455,7 @@ export default class Pets extends Phaser.Scene {
 
         const lines = this.LINES[`${state}Start`];
         const text = line ?? (mode ? this.MODES[state] : lines ? this.pick(lines) : undefined);
-        if (text) this.showBubble(pet, text);
+        if (text) this.showBubble(pet, text, this.BUBBLE_DURATION, mode || line ? this.NORMAL : this.CASUAL);
         return true;
     }
 
@@ -1454,7 +1484,7 @@ export default class Pets extends Phaser.Scene {
         }
 
         const lines = this.LINES[`${was}End`];
-        if (lines) this.showBubble(pet, this.pick(lines));
+        if (lines) this.showBubble(pet, this.pick(lines), this.BUBBLE_DURATION, this.CASUAL);
         this.switchState(pet, "stand");
         // stretch for a moment, then carry on
         setTimeout(() => {
@@ -1528,8 +1558,14 @@ export default class Pets extends Phaser.Scene {
         }
     }
 
-    showBubble(pet: Pet, text: string, duration: number = this.BUBBLE_DURATION): void {
+    showBubble(pet: Pet, text: string, duration: number = this.BUBBLE_DURATION, priority: number = this.NORMAL): void {
+        // don't cover something more important that is still showing
+        if (pet.bubble && (pet.bubblePriority ?? 0) > priority && this.time.now < (pet.bubbleUntil ?? 0)) return;
+        // casual chatter is thinned out by the chattiness setting
+        if (priority === this.CASUAL && Math.random() > (this.CHATTY[this.companion.chattiness] ?? 0.75)) return;
         this.clearBubble(pet);
+        pet.bubblePriority = priority;
+        pet.bubbleUntil = this.time.now + duration;
         const style = pet.personality?.bubble ?? {};
         const fill = this.color(style.fill, "#FFF6E5");
         const stroke = this.color(style.stroke, "#5B4636");
@@ -1675,13 +1711,17 @@ export default class Pets extends Phaser.Scene {
             const above = mouse.y < head.y - 30 && Math.abs(dx) < 160;
 
             if (pet.follow) {
-                if (Math.abs(dx) > 80) {
+                // start walking when the cursor is clearly away, keep walking until close (no stop-start jitter)
+                const walking = state === "walk";
+                if (Math.abs(dx) > (walking ? 60 : 120)) {
                     this.setPetLookToTheLeft(pet, dx < 0);
-                    if (state !== "walk") this.switchState(pet, "walk");
+                    if (!walking) this.switchState(pet, "walk");
                     else this.updateDirection(pet, dx < 0 ? Direction.LEFT : Direction.RIGHT);
+                    // far away? hurry!
+                    if (Math.abs(dx) > 400) pet.setVelocityX(Math.sign(dx) * this.PET_MOVE_VELOCITY * 2.2);
                 } else {
-                    this.setPetLookToTheLeft(pet, dx < 0);
-                    this.switchState(pet, above ? "lookup" : "look");
+                    if (Math.abs(dx) > 30) this.setPetLookToTheLeft(pet, dx < 0);
+                    this.settleLook(pet, above ? "lookup" : "look");
                 }
                 return;
             }
@@ -1692,14 +1732,25 @@ export default class Pets extends Phaser.Scene {
                 return;
             }
             const near = Math.abs(dx) < 500 && mouse.y > pet.y - 500;
-            if (recent && near) {
-                if (Math.abs(dx) > 15) this.setPetLookToTheLeft(pet, dx < 0);
-                const want = above ? "lookup" : "look";
-                if (state !== want) this.switchState(pet, want);
-            } else if (state === "look" || state === "lookup") {
-                this.switchState(pet, "stand");
-            }
+            // only turn around when the cursor is clearly on the other side
+            if (recent && near && Math.abs(dx) > 40) this.setPetLookToTheLeft(pet, dx < 0);
+            this.settleLook(pet, recent && near ? (above ? "lookup" : "look") : "stand");
         });
+    }
+
+    // switch look / lookup / stand only after the same choice two checks in a row
+    settleLook(pet: Pet, want: string): void {
+        if (pet.lookWant === want) pet.lookWantCount = (pet.lookWantCount ?? 0) + 1;
+        else {
+            pet.lookWant = want;
+            pet.lookWantCount = 1;
+        }
+        const state = this.currentState(pet);
+        if (state !== want && (pet.lookWantCount ?? 0) >= 2) {
+            // "stand" only replaces looking, never other behaviours
+            if (want === "stand" && state !== "look" && state !== "lookup") return;
+            this.switchState(pet, want);
+        }
     }
 
     async pollSystem(): Promise<void> {
@@ -1720,11 +1771,15 @@ export default class Pets extends Phaser.Scene {
                 if (pet.activity) this.endActivity(pet);
                 this.startActivity(pet, "sleep", true, this.pick(this.LINES.away));
                 pet.awayMode = true; // also when the nap is pending until it lands
+                this.awaySince = Date.now() - status.idle_ms;
             } else if (!away && pet.awayMode && status.idle_ms < 5000) {
                 pet.pendingActivity = undefined;
                 this.endActivity(pet);
                 this.switchState(pet, "stand");
-                this.showBubble(pet, this.pick(this.LINES.welcomeBack).replace("{time}", this.timeOfDay()));
+                const mins = this.awaySince ? Math.round((Date.now() - this.awaySince) / 60000) : 0;
+                const howLong = mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`;
+                const line = this.pick(this.LINES.welcomeBack).replace("{time}", this.timeOfDay());
+                this.showBubble(pet, mins >= 1 ? `${line}\nYou were away ${howLong} ☕` : line, 4000);
                 this.time.delayedCall(600, () => this.playReaction(pet, "greet"));
                 pet.lastGreetAt = now;
                 this.lastInteraction = now;
@@ -1756,7 +1811,8 @@ export default class Pets extends Phaser.Scene {
             if (!target || !settled || !this.isFree(pet)) return;
             if (now - (this.lastAutoAt[target] ?? -Infinity) < p.appCooldown * 60000) return;
             const lines = this.LINES[`auto${target[0].toUpperCase()}${target.slice(1)}`];
-            if (this.startActivity(pet, target, false, lines ? this.pick(lines) : undefined)) {
+            const line = lines ? this.pick(lines).replace("{app}", appName(status, p.apps)) : undefined;
+            if (this.startActivity(pet, target, false, line)) {
                 pet.autoActivity = true;
                 this.lastAutoAt[target] = now;
             }
@@ -1778,7 +1834,7 @@ export default class Pets extends Phaser.Scene {
                 if (isNew && pet.activity && !pet.mode && !pet.autoActivity) this.endActivity(pet);
                 if (isNew && media.title) {
                     const name = media.title.length > 28 ? `${media.title.slice(0, 27)}…` : media.title;
-                    this.showBubble(pet, `${this.pick(this.LINES.song)}\n♪ ${name}`, 3500);
+                    this.showBubble(pet, `${this.pick(this.LINES.song)}\n♪ ${name}`, 3500, this.CASUAL);
                 }
                 if (!this.isFree(pet)) {
                     if (!pet.activity && Math.random() < 0.4) this.spawnParticle(pet, "dance", this.PARTICLES.dance);
@@ -1833,8 +1889,18 @@ export default class Pets extends Phaser.Scene {
             saveReminders(reminders.filter((r) => r.at > nowMs));
             due.forEach((r, k) => {
                 const missed = nowMs - r.at > 120000 ? " (missed)" : "";
-                this.time.delayedCall(k * 4000, () => this.deliver(`⏰ ${r.text}${missed}`, 15000, true));
+                const text = `⏰ ${r.text}${missed}`;
+                this.time.delayedCall(k * 4000, () => this.deliver(`${text}\n(click me when done)`, 15000, true));
+                // keeps reminding until you click the pet
+                this.nagging = { text, left: 2, nextAt: nowMs + k * 4000 + 120000 };
             });
+        }
+        if (this.nagging && nowMs >= this.nagging.nextAt) {
+            const nag = this.nagging;
+            this.deliver(`${nag.text}\n(click me when done)`, 15000, true);
+            nag.left--;
+            nag.nextAt = nowMs + 120000;
+            if (nag.left <= 0) this.nagging = null;
         }
     }
 
@@ -1846,7 +1912,7 @@ export default class Pets extends Phaser.Scene {
                 this.endActivity(pet);
                 this.switchState(pet, "stand");
             }
-            this.showBubble(pet, text, duration);
+            this.showBubble(pet, text, duration, this.IMPORTANT);
             if (this.isFree(pet)) this.playReaction(pet, urgent ? "attention" : "greet");
             if (urgent) this.spawnParticle(pet, "attention", { texts: ["⏰", "❗"], colors: ["#e8433f", "#ffb02e"] });
         });
@@ -1882,6 +1948,7 @@ export default class Pets extends Phaser.Scene {
         const f = this.personality().focus;
         if (this.focus.phase === "work") {
             this.focus.sessions++;
+            saveFocusSessions(this.focus.sessions);
             const long = f.longEvery && this.focus.sessions % f.longEvery === 0;
             const minutes = long ? f.longBreak ?? 15 : f.break ?? 5;
             this.focus.phase = "break";
@@ -1889,7 +1956,7 @@ export default class Pets extends Phaser.Scene {
             this.forEachAvatar((pet) => {
                 if (pet.mode && pet.activity === "laptop") this.endActivity(pet);
                 this.switchState(pet, "stand");
-                this.showBubble(pet, `${this.pick(this.LINES.focusDone)} (${minutes} min) · 🍅×${this.focus.sessions}`, 6000);
+                this.showBubble(pet, `${this.pick(this.LINES.focusDone)} (${minutes} min) · 🍅×${this.focus.sessions}`, 6000, this.IMPORTANT);
                 this.time.delayedCall(500, () => this.playReaction(pet, "dance"));
             });
         } else {
@@ -1900,7 +1967,7 @@ export default class Pets extends Phaser.Scene {
             this.focus.phase = null;
             this.forEachAvatar((pet) => {
                 this.setTimerPill(pet, null);
-                this.showBubble(pet, this.pick(this.LINES.breakOver), 6000);
+                this.showBubble(pet, this.pick(this.LINES.breakOver), 6000, this.IMPORTANT);
                 this.playReaction(pet, "attention");
             });
         }
@@ -2094,9 +2161,9 @@ export default class Pets extends Phaser.Scene {
             const line = this.pick(this.personality(pet).greetings);
             this.showBubble(pet, line.replace("{time}", this.timeOfDay()));
         } else if (state === "spin" && Math.random() < 0.6) {
-            this.showBubble(pet, this.pick(this.LINES.spin));
+            this.showBubble(pet, this.pick(this.LINES.spin), this.BUBBLE_DURATION, this.CASUAL);
         } else if (state === "dance" && Math.random() < 0.4) {
-            this.showBubble(pet, this.pick(this.LINES.dance));
+            this.showBubble(pet, this.pick(this.LINES.dance), this.BUBBLE_DURATION, this.CASUAL);
         }
     }
 }

@@ -145,6 +145,8 @@ export interface ICompanionSettings {
     awayDetection: boolean;
     // water / stretch / eye-break reminders
     nudges: boolean;
+    // how often it says casual things (song names, "Game time!"…); important messages always show
+    chattiness: "quiet" | "normal" | "chatty";
 }
 
 export const DEFAULT_COMPANION: ICompanionSettings = {
@@ -155,6 +157,7 @@ export const DEFAULT_COMPANION: ICompanionSettings = {
     music: true,
     awayDetection: true,
     nudges: true,
+    chattiness: "normal",
 };
 
 export function loadCompanion(): ICompanionSettings {
@@ -205,10 +208,58 @@ export function isOwnApp(status: ISystemStatus): boolean {
     return app.includes("windowpet") || app.includes("window_pet");
 }
 
+// words that give away a song on regular YouTube (title, channel or window title)
+const SONG_WORDS = [
+    "official audio", "official music video", "music video", "official video", "lyric", "(audio)", "[audio]",
+    "lofi", "lo-fi", "remix", "feat.", " ft.", "vevo", " - topic", "jukebox", "full album", "playlist",
+    "mashup", "slowed", "reverb", "8d audio", "bass boosted", "acoustic", "unplugged", "song",
+];
+
 export function isMusicContext(status: ISystemStatus): boolean {
     const title = status.title.toLowerCase();
     const source = status.media.app.toLowerCase();
-    return MUSIC_HINTS.some((h) => title.includes(h) || source.includes(h.split(" ")[0]));
+    if (MUSIC_HINTS.some((h) => title.includes(h) || source.includes(h.split(" ")[0]))) return true;
+    // a regular YouTube video that is clearly a song
+    const media = `${status.media.title} ${status.media.artist}`.toLowerCase();
+    return SONG_WORDS.some((w) => media.includes(w) || title.includes(w));
+}
+
+const APP_NAMES: { [exe: string]: string } = {
+    "code.exe": "VS Code", "idea64.exe": "IntelliJ", "springtoolsuite4.exe": "Spring Tool Suite",
+    "pycharm64.exe": "PyCharm", "webstorm64.exe": "WebStorm", "devenv.exe": "Visual Studio",
+    "sublime_text.exe": "Sublime", "notepad++.exe": "Notepad++", "postman.exe": "Postman",
+    "winword.exe": "Word", "excel.exe": "Excel", "powerpnt.exe": "PowerPoint",
+    "vlc.exe": "VLC", "steam.exe": "Steam", "epicgameslauncher.exe": "Epic Games",
+};
+
+// a friendly name for the app in front ("IntelliJ", "YouTube"…)
+export function appName(status: ISystemStatus, apps: { [state: string]: string[] }): string {
+    const exe = status.app.toLowerCase();
+    if (APP_NAMES[exe]) return APP_NAMES[exe];
+    const title = status.title.toLowerCase();
+    for (const patterns of Object.values(apps)) {
+        const hit = patterns.find((p) => !p.endsWith(".exe") && title.includes(p.toLowerCase()));
+        if (hit) return hit.replace(/\b\w/g, (c) => c.toUpperCase()).replace("Youtube", "YouTube");
+    }
+    return exe.replace(/\.exe$/, "") || "this";
+}
+
+// ---------- focus sessions (kept for the day across restarts) ----------
+
+const FOCUS_KEY = "windowpet.focus";
+
+function today(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+export function loadFocusSessions(): number {
+    const saved = read<{ date: string; sessions: number }>(FOCUS_KEY, { date: "", sessions: 0 });
+    return saved.date === today() ? saved.sessions : 0;
+}
+
+export function saveFocusSessions(sessions: number): void {
+    write(FOCUS_KEY, { date: today(), sessions });
 }
 
 // the activity that matches the app in front, or null
