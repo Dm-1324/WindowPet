@@ -55,7 +55,30 @@ export interface IAvatarPersonality {
     attentionAfter?: number;
     // global keyboard shortcuts, e.g. { "sleep": "CommandOrControl+Alt+S" }
     hotkeys?: { [action: string]: string };
+    // minutes without keyboard/mouse input before it naps (0 = never)
+    awayAfter?: number;
+    // join in when these apps are in front: { "laptop": ["code.exe", ...], "movie": ["youtube", ...] }
+    // entries ending in .exe match the program, anything else matches the window title
+    apps?: { [state: string]: string[] };
+    // minutes before it joins the same kind of app again
+    appCooldown?: number;
+    // dance along when music is playing
+    music?: boolean;
+    // focus timer in minutes
+    focus?: { work?: number; break?: number; longBreak?: number; longEvery?: number; autoNext?: boolean };
+    // minutes between nudges (0 = off): water, stretch, eyes
+    nudges?: { [kind: string]: number };
     bubble?: IBubbleStyle;
+}
+
+// clothes and accessories, drawn onto every frame
+export interface IWardrobe {
+    hat?: "none" | "party" | "santa" | "beanie" | "crown" | "cap" | "bow" | "flower";
+    glasses?: "none" | "round" | "sunglasses" | "hearts";
+    headphones?: boolean;
+    // shirt colour ("none" or a hex colour) and print
+    shirt?: string;
+    shirtPattern?: "plain" | "stripes" | "star" | "heart";
 }
 
 export interface IAvatarOptions {
@@ -71,12 +94,13 @@ export interface IAvatarOptions {
     eyelidColor?: string;
     parts?: IAvatarPart[];
     personality?: IAvatarPersonality;
+    wardrobe?: IWardrobe;
 }
 
 // ---------- poses ----------
 
 type Anchor = "ground" | "center" | "wall" | "ceiling" | "bed";
-type Eyes = "open" | "closed" | "happy" | "sleep" | "angry" | "sad";
+type Eyes = "open" | "closed" | "happy" | "sleep" | "angry" | "sad" | "side" | "up";
 type Prop = "laptop" | "controller" | "bed" | "popcorn";
 
 interface ILimbPose {
@@ -145,6 +169,27 @@ export const AVATAR_STATE_DEFS: IAvatarStateDef[] = [
             sy: 1 + 0.012 * sin(2 * TAU * t),
             eyes: blink(i, [5, 19]),
             limbs: { armL: { raise: 0.15 * Math.max(0, sin(TAU * t)) }, armR: { raise: 0.15 * Math.max(0, -sin(TAU * t)) } },
+        }),
+    },
+    {
+        // looking at the mouse cursor (Pets.ts flips it to face the cursor)
+        state: "look", frames: 24, frameRate: 8, anchor: "ground",
+        pose: (t, i) => {
+            const s = sin(TAU * t);
+            return {
+                rot: 0.035, sy: 1 + 0.018 * s, sx: 1 - 0.01 * s,
+                eyes: i === 15 ? "closed" : "side",
+                limbs: { armL: { raise: 0.05 * s }, armR: { raise: 0.12 + 0.05 * s } },
+            };
+        },
+    },
+    {
+        // cursor is above its head
+        state: "lookup", frames: 16, frameRate: 8, anchor: "ground",
+        pose: (t, i) => ({
+            rot: -0.05, sy: 1.03 + 0.01 * sin(TAU * t), sx: 0.99,
+            eyes: i === 11 ? "closed" : "up",
+            limbs: { armL: { raise: 0.25 }, armR: { raise: 0.25 } },
         }),
     },
     {
@@ -565,6 +610,29 @@ function eyeVariant(base: HTMLCanvasElement, opts: IAvatarOptions, kind: Eyes): 
         return c;
     }
 
+    if (kind === "side" || kind === "up") {
+        // move each eye inside its socket: towards the facing side, or up
+        for (const e of opts.eyes!) {
+            const dx = kind === "side" ? e.rx * 0.45 : 0;
+            const dy = kind === "up" ? -e.ry * 0.38 : 0;
+            const px = e.x - e.rx * 1.3, py = e.y - e.ry * 1.3;
+            const patch = makeCanvas(e.rx * 2.6, e.ry * 2.6);
+            context(patch).drawImage(base, px, py, patch.width, patch.height, 0, 0, patch.width, patch.height);
+
+            ctx.fillStyle = opts.eyelidColor ?? sampleAround(base, e);
+            ctx.beginPath();
+            ctx.ellipse(e.x, e.y, e.rx * 1.12, e.ry * 1.1, 0, 0, TAU);
+            ctx.fill();
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(e.x + dx, e.y + dy, e.rx * 1.08, e.ry * 1.06, 0, 0, TAU);
+            ctx.clip();
+            ctx.drawImage(patch, px + dx, py + dy);
+            ctx.restore();
+        }
+        return c;
+    }
+
     for (const e of opts.eyes!) {
         ctx.fillStyle = opts.eyelidColor ?? sampleAround(base, e);
         ctx.beginPath();
@@ -820,6 +888,324 @@ function drawBlanket(ctx: CanvasRenderingContext2D, b: IBedLayout, h: number, w:
     ctx.fill();
 }
 
+// ---------- wardrobe ----------
+
+interface IHeadGeometry {
+    top: number; // first row of the head (thin hair / sprouts ignored), source px
+    cx: number; // head centre x at hat level
+    width: number; // head width at hat level
+    eyeY: number; // eye row (or a guess)
+    halfAtEyes: number; // half the body width at the eye row
+}
+
+function rowExtents(data: Uint8ClampedArray, w: number, y: number): [number, number, number] {
+    let l = -1, r = -1, count = 0;
+    for (let x = 0; x < w; x++) {
+        if (data[(y * w + x) * 4 + 3] > 40) {
+            if (l < 0) l = x;
+            r = x;
+            count++;
+        }
+    }
+    return [l, r, count];
+}
+
+function headGeometry(c: HTMLCanvasElement, b: IBox, opts: IAvatarOptions): IHeadGeometry {
+    const w = c.width;
+    const data = context(c).getImageData(0, 0, w, c.height).data;
+    let maxCount = 1;
+    for (let y = b.y; y < b.y + b.h * 0.6; y++) maxCount = Math.max(maxCount, rowExtents(data, w, y)[2]);
+    let top = b.y;
+    for (let y = b.y; y < b.y + b.h * 0.6; y++) {
+        if (rowExtents(data, w, y)[2] >= maxCount * 0.4) {
+            top = y;
+            break;
+        }
+    }
+    const hatRow = Math.min(c.height - 1, Math.round(top + b.h * 0.12));
+    const [l, r] = rowExtents(data, w, hatRow);
+    const eyes = opts.eyes ?? [];
+    const eyeY = eyes.length ? eyes.reduce((s, e) => s + e.y, 0) / eyes.length : top + b.h * 0.3;
+    const [el, er] = rowExtents(data, w, Math.min(c.height - 1, Math.round(eyeY)));
+    return {
+        top,
+        cx: l >= 0 ? (l + r) / 2 : b.x + b.w / 2,
+        width: l >= 0 ? r - l : b.w * 0.6,
+        eyeY,
+        halfAtEyes: el >= 0 ? (er - el) / 2 : b.w * 0.4,
+    };
+}
+
+// t-shirt: painted on the body only, from below the face down
+function applyShirt(c: HTMLCanvasElement, b: IBox, opts: IAvatarOptions, wardrobe: IWardrobe) {
+    if (!wardrobe.shirt || wardrobe.shirt === "none") return;
+    const ctx = context(c);
+    const eyes = opts.eyes ?? [];
+    const top = eyes.length
+        ? Math.max(...eyes.map((e) => e.y + e.ry * 2.3))
+        : b.y + b.h * 0.55;
+    const bottom = b.y + b.h;
+    const cx = b.x + b.w / 2;
+    const hgt = bottom - top;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = wardrobe.shirt;
+    ctx.fillRect(b.x, top, b.w, hgt);
+    // soft shading at the sides
+    const shade = ctx.createLinearGradient(b.x, 0, b.x + b.w, 0);
+    shade.addColorStop(0, "rgba(0,0,0,0.18)");
+    shade.addColorStop(0.3, "rgba(0,0,0,0)");
+    shade.addColorStop(0.7, "rgba(0,0,0,0)");
+    shade.addColorStop(1, "rgba(0,0,0,0.18)");
+    ctx.fillStyle = shade;
+    ctx.fillRect(b.x, top, b.w, hgt);
+
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    if (wardrobe.shirtPattern === "stripes") {
+        for (let y = top + hgt * 0.18; y < bottom; y += hgt * 0.22) ctx.fillRect(b.x, y, b.w, hgt * 0.07);
+    } else if (wardrobe.shirtPattern === "star") {
+        const r = hgt * 0.17, sx = cx, sy = top + hgt * 0.42;
+        ctx.beginPath();
+        for (let k = 0; k < 10; k++) {
+            const a = -Math.PI / 2 + (k * Math.PI) / 5;
+            const rr = k % 2 === 0 ? r : r * 0.45;
+            ctx.lineTo(sx + cos(a) * rr, sy + sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fill();
+    } else if (wardrobe.shirtPattern === "heart") {
+        const r = hgt * 0.11, sx = cx, sy = top + hgt * 0.38;
+        ctx.fillStyle = "rgba(255,90,120,0.95)";
+        ctx.beginPath();
+        ctx.moveTo(sx, sy + r * 1.6);
+        ctx.bezierCurveTo(sx - r * 2.2, sy + r * 0.2, sx - r * 1.2, sy - r * 1.4, sx, sy - r * 0.3);
+        ctx.bezierCurveTo(sx + r * 1.2, sy - r * 1.4, sx + r * 2.2, sy + r * 0.2, sx, sy + r * 1.6);
+        ctx.fill();
+    }
+    // collar + neckline seam
+    ctx.strokeStyle = "rgba(0,0,0,0.3)";
+    ctx.lineWidth = Math.max(2, b.h * 0.008);
+    ctx.beginPath();
+    ctx.moveTo(b.x, top);
+    ctx.lineTo(b.x + b.w, top);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(cx - b.w * 0.12, top - 1);
+    ctx.lineTo(cx, top + hgt * 0.12);
+    ctx.lineTo(cx + b.w * 0.12, top - 1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
+
+function pompom(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color = "#ffffff") {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.15)";
+    ctx.lineWidth = Math.max(1, r * 0.15);
+    ctx.stroke();
+}
+
+// hats are drawn in character space: (cx, top) = top-centre of the head, hw = head width
+function drawHat(ctx: CanvasRenderingContext2D, hat: string, cx: number, top: number, hw: number) {
+    const line = Math.max(1, hw * 0.03);
+    ctx.lineJoin = "round";
+    if (hat === "party") {
+        const base = top + hw * 0.08, bw = hw * 0.5, ht = hw * 0.62;
+        ctx.save();
+        ctx.translate(cx, base);
+        ctx.rotate(0.18);
+        ctx.beginPath();
+        ctx.moveTo(-bw / 2, 0);
+        ctx.lineTo(0, -ht);
+        ctx.lineTo(bw / 2, 0);
+        ctx.closePath();
+        ctx.fillStyle = "#7c5cff";
+        ctx.fill();
+        ctx.save();
+        ctx.clip();
+        ["#ffd54f", "#4dd0e1", "#ff6b9a"].forEach((col, k) => {
+            ctx.fillStyle = col;
+            ctx.fillRect(-bw, -ht * (0.25 + k * 0.25), bw * 2, ht * 0.09);
+        });
+        ctx.restore();
+        ctx.strokeStyle = "#3d2b8f";
+        ctx.lineWidth = line;
+        ctx.stroke();
+        pompom(ctx, 0, -ht, hw * 0.08, "#ffd54f");
+        ctx.restore();
+    } else if (hat === "santa") {
+        const base = top + hw * 0.1;
+        ctx.fillStyle = "#e53935";
+        ctx.beginPath();
+        ctx.moveTo(cx - hw * 0.42, base);
+        ctx.quadraticCurveTo(cx - hw * 0.1, top - hw * 0.65, cx + hw * 0.45, top - hw * 0.2);
+        ctx.quadraticCurveTo(cx + hw * 0.62, top - hw * 0.05, cx + hw * 0.55, top + hw * 0.15);
+        ctx.quadraticCurveTo(cx + hw * 0.3, top - hw * 0.15, cx + hw * 0.42, base);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#a12622";
+        ctx.lineWidth = line;
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.ellipse(cx, base, hw * 0.48, hw * 0.1, 0, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,0.12)";
+        ctx.stroke();
+        pompom(ctx, cx + hw * 0.56, top + hw * 0.17, hw * 0.09);
+    } else if (hat === "beanie") {
+        const base = top + hw * 0.16;
+        ctx.fillStyle = "#26a69a";
+        ctx.beginPath();
+        ctx.ellipse(cx, base, hw * 0.5, hw * 0.42, 0, Math.PI, TAU);
+        ctx.fill();
+        ctx.strokeStyle = "#17695f";
+        ctx.lineWidth = line;
+        ctx.stroke();
+        ctx.fillStyle = "#1c8379";
+        roundRect(ctx, cx - hw * 0.52, base - hw * 0.08, hw * 1.04, hw * 0.16, hw * 0.06);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.35)";
+        for (let x = cx - hw * 0.45; x < cx + hw * 0.5; x += hw * 0.09) {
+            ctx.beginPath();
+            ctx.moveTo(x, base - hw * 0.06);
+            ctx.lineTo(x, base + hw * 0.06);
+            ctx.stroke();
+        }
+        pompom(ctx, cx, base - hw * 0.44, hw * 0.1, "#ffe082");
+    } else if (hat === "crown") {
+        const base = top + hw * 0.08, bw = hw * 0.56, ht = hw * 0.3;
+        ctx.fillStyle = "#ffca28";
+        ctx.beginPath();
+        ctx.moveTo(cx - bw / 2, base);
+        ctx.lineTo(cx - bw / 2, base - ht);
+        ctx.lineTo(cx - bw / 4, base - ht * 0.55);
+        ctx.lineTo(cx, base - ht * 1.1);
+        ctx.lineTo(cx + bw / 4, base - ht * 0.55);
+        ctx.lineTo(cx + bw / 2, base - ht);
+        ctx.lineTo(cx + bw / 2, base);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#c79100";
+        ctx.lineWidth = line;
+        ctx.stroke();
+        [["#e53935", -0.25], ["#1e88e5", 0], ["#43a047", 0.25]].forEach(([col, off]) => {
+            ctx.fillStyle = col as string;
+            ctx.beginPath();
+            ctx.arc(cx + (off as number) * bw, base - ht * 0.28, hw * 0.045, 0, TAU);
+            ctx.fill();
+        });
+    } else if (hat === "cap") {
+        const base = top + hw * 0.16;
+        ctx.fillStyle = "#1e88e5";
+        ctx.beginPath();
+        ctx.ellipse(cx, base, hw * 0.5, hw * 0.38, 0, Math.PI, TAU);
+        ctx.fill();
+        ctx.strokeStyle = "#0d5aa7";
+        ctx.lineWidth = line;
+        ctx.stroke();
+        // bill points the way the pet faces (frames face right)
+        ctx.fillStyle = "#1565c0";
+        ctx.beginPath();
+        ctx.ellipse(cx + hw * 0.52, base - hw * 0.02, hw * 0.34, hw * 0.08, 0.05, 0, TAU);
+        ctx.fill();
+        ctx.stroke();
+        pompom(ctx, cx, base - hw * 0.38, hw * 0.05, "#0d47a1");
+    } else if (hat === "bow") {
+        const x = cx - hw * 0.28, y = top + hw * 0.06, r = hw * 0.2;
+        ctx.fillStyle = "#ff6b9a";
+        ctx.strokeStyle = "#c2185b";
+        ctx.lineWidth = line;
+        for (const dir of [-1, 1]) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.quadraticCurveTo(x + dir * r * 1.4, y - r, x + dir * r * 1.2, y + r * 0.6);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+        }
+        pompom(ctx, x, y, r * 0.3, "#ff8fb1");
+    } else if (hat === "flower") {
+        const x = cx - hw * 0.3, y = top + hw * 0.08, r = hw * 0.1;
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#f48fb1";
+        ctx.lineWidth = line;
+        for (let k = 0; k < 5; k++) {
+            const a = (k * TAU) / 5;
+            ctx.beginPath();
+            ctx.arc(x + cos(a) * r, y + sin(a) * r, r * 0.8, 0, TAU);
+            ctx.fill();
+            ctx.stroke();
+        }
+        pompom(ctx, x, y, r * 0.6, "#ffd54f");
+    }
+}
+
+function drawGlasses(ctx: CanvasRenderingContext2D, kind: string, eyes: { x: number; y: number; r: number }[]) {
+    if (eyes.length === 0) return;
+    const r = Math.max(...eyes.map((e) => e.r));
+    const sorted = [...eyes].sort((a, b) => a.x - b.x);
+    ctx.lineWidth = Math.max(1.5, r * 0.18);
+    ctx.strokeStyle = kind === "hearts" ? "#d81b60" : "#2b2233";
+
+    for (const e of sorted) {
+        ctx.beginPath();
+        if (kind === "hearts") {
+            const s = r * 1.1;
+            ctx.moveTo(e.x, e.y + s);
+            ctx.bezierCurveTo(e.x - s * 1.6, e.y + s * 0.1, e.x - s * 0.9, e.y - s * 1.1, e.x, e.y - s * 0.35);
+            ctx.bezierCurveTo(e.x + s * 0.9, e.y - s * 1.1, e.x + s * 1.6, e.y + s * 0.1, e.x, e.y + s);
+            ctx.fillStyle = "rgba(255,105,150,0.75)";
+        } else {
+            ctx.arc(e.x, e.y, r, 0, TAU);
+            ctx.fillStyle = kind === "sunglasses" ? "rgba(25,20,35,0.92)" : "rgba(200,230,255,0.25)";
+        }
+        ctx.fill();
+        ctx.stroke();
+        // shine
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        ctx.beginPath();
+        ctx.arc(e.x - r * 0.35, e.y - r * 0.35, r * 0.18, 0, TAU);
+        ctx.fill();
+    }
+    // bridge + arms
+    ctx.beginPath();
+    for (let k = 0; k < sorted.length - 1; k++) {
+        ctx.moveTo(sorted[k].x + r, sorted[k].y - r * 0.2);
+        ctx.quadraticCurveTo((sorted[k].x + sorted[k + 1].x) / 2, sorted[k].y - r * 0.6, sorted[k + 1].x - r, sorted[k + 1].y - r * 0.2);
+    }
+    const first = sorted[0], last = sorted[sorted.length - 1];
+    ctx.moveTo(first.x - r, first.y - r * 0.2);
+    ctx.lineTo(first.x - r * 1.9, first.y - r * 0.5);
+    ctx.moveTo(last.x + r, last.y - r * 0.2);
+    ctx.lineTo(last.x + r * 1.9, last.y - r * 0.5);
+    ctx.stroke();
+}
+
+function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, top: number, eyeY: number, half: number) {
+    const cupW = half * 0.38, cupH = half * 0.7;
+    ctx.strokeStyle = "#37474f";
+    ctx.lineWidth = Math.max(2, half * 0.12);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx - half * 0.98, eyeY - cupH * 0.3);
+    ctx.bezierCurveTo(cx - half * 1.05, top - half * 0.45, cx + half * 1.05, top - half * 0.45, cx + half * 0.98, eyeY - cupH * 0.3);
+    ctx.stroke();
+    for (const dir of [-1, 1]) {
+        ctx.fillStyle = "#ff7043";
+        roundRect(ctx, cx + dir * half * 0.98 - cupW / 2, eyeY - cupH / 2, cupW, cupH, cupW * 0.45);
+        ctx.fill();
+        ctx.strokeStyle = "#bf360c";
+        ctx.lineWidth = Math.max(1, half * 0.05);
+        ctx.stroke();
+    }
+}
+
 // ---------- sheet builder ----------
 
 export interface IPartImage {
@@ -871,9 +1257,20 @@ export function buildAvatarSheet(
     const k = h / bounds.h; // source px -> sheet px
     const margin = Math.max(1, Math.round(frameSize * 0.01));
 
+    // outfit: shirt is painted into the body, accessories are drawn on top in every frame
+    const wardrobe = options.wardrobe ?? {};
+    let head: IHeadGeometry | null = null;
+    try {
+        head = headGeometry(base, bounds, options);
+        applyShirt(base, bounds, options, wardrobe);
+    } catch (err) {
+        console.warn("Wardrobe skipped:", err);
+    }
+    const toLocal = (sx: number, sy: number) => ({ x: (sx - bounds.x) * k - w / 2, y: (sy - bounds.y) * k - h });
+
     // 3. body in every eye state, cropped and scaled the same way
     const body: { [e in Eyes]: HTMLCanvasElement } = {} as any;
-    for (const kind of ["open", "closed", "happy", "sleep", "angry", "sad"] as Eyes[]) {
+    for (const kind of ["open", "closed", "happy", "sleep", "angry", "sad", "side", "up"] as Eyes[]) {
         let variant = base;
         try {
             variant = eyeVariant(base, options, kind);
@@ -909,6 +1306,19 @@ export function buildAvatarSheet(
         limbs.filter((l) => l.part.behind).forEach(drawLimb);
         ctx.drawImage(body[pose.eyes ?? "open"], -w / 2, -h, w, h);
         limbs.filter((l) => !l.part.behind).forEach(drawLimb);
+
+        if (head) {
+            const top = toLocal(head.cx, head.top);
+            const hw = head.width * k;
+            if (wardrobe.headphones) {
+                drawHeadphones(ctx, top.x, top.y, toLocal(0, head.eyeY).y, head.halfAtEyes * k);
+            }
+            if (wardrobe.glasses && wardrobe.glasses !== "none" && pose.eyes !== "sleep") {
+                const eyes = (options.eyes ?? []).map((e) => ({ ...toLocal(e.x, e.y), r: Math.max(e.rx, e.ry) * k * 1.3 }));
+                drawGlasses(ctx, wardrobe.glasses, eyes);
+            }
+            if (wardrobe.hat && wardrobe.hat !== "none") drawHat(ctx, wardrobe.hat, top.x, top.y, hw);
+        }
     };
 
     // 4. draw every frame

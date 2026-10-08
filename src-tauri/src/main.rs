@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-use app::{cmd, conf, tray, utils};
+use app::{cmd, conf, system, tray, utils};
 use log::info;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
@@ -56,6 +56,7 @@ fn build_app() {
             conf::combine_config_path,
             cmd::get_mouse_position,
             cmd::open_folder,
+            system::get_system_status,
             utils::reopen_main_window,
         ])
         .build(tauri::generate_context!())

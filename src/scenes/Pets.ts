@@ -17,6 +17,24 @@ import defaultSettings from "../../src-tauri/src/app/default/settings.json";
 import { ConfigManager, InputManager } from "./manager";
 import { avatarMeta, IAvatarPersonality } from "./avatar";
 import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortcut";
+import { invoke } from "@tauri-apps/api/tauri";
+import { createAvatarTexture, AVATAR_STATE_DEFS } from "./avatar";
+import {
+    describeNewItem,
+    effectiveWardrobe,
+    isBirthday,
+    loadReminders,
+    saveReminders,
+    WARDROBE_KEY,
+} from "../utils/companion";
+import { IWardrobe } from "./avatar";
+
+interface ISystemStatus {
+    idle_ms: number;
+    app: string;
+    title: string;
+    media: { playing: boolean; title: string; artist: string; app: string };
+}
 
 interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     direction?: Direction;
@@ -36,6 +54,14 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     mode?: boolean;
     // activity to start as soon as the pet is back on the ground
     pendingActivity?: { state: string; mode?: boolean; line?: string };
+    // started because of the app in front (ends when you leave that app)
+    autoActivity?: boolean;
+    // napping because you're away
+    awayMode?: boolean;
+    // walks after the mouse cursor
+    follow?: boolean;
+    // focus-timer pill above the head
+    timerPill?: Phaser.GameObjects.Container | null;
     nextParticleAt?: number;
     lastGreetAt?: number;
     downInfo?: { x: number; y: number; t: number };
@@ -77,6 +103,8 @@ export default class Pets extends Phaser.Scene {
         "angry",
         "sad",
         "attention",
+        "look",
+        "lookup",
     ];
     private readonly FRAME_RATE: number = 9;
     private readonly UPDATE_DELAY: number = 1000 / this.FRAME_RATE;
@@ -102,7 +130,23 @@ export default class Pets extends Phaser.Scene {
         },
         nightSleepBoost: 5,
         attentionAfter: 8,
+        awayAfter: 3,
+        apps: {
+            laptop: [
+                "code.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "devenv.exe",
+                "springtoolsuite4.exe", "sublime_text.exe", "notepad++.exe", "windowsterminal.exe",
+                "winword.exe", "excel.exe", "powerpnt.exe", "postman.exe",
+            ],
+            movie: ["vlc.exe", "potplayermini64.exe", "youtube", "netflix", "prime video", "hotstar", "disney+", "jiocinema"],
+            game: ["steam.exe", "epicgameslauncher.exe", "robloxplayerbeta.exe", "minecraft", "valorant", "genshinimpact.exe"],
+        },
+        appCooldown: 2,
+        music: true,
+        focus: { work: 25, break: 5, longBreak: 15, longEvery: 4, autoNext: false },
+        nudges: { water: 60, stretch: 45, eyes: 20 },
         hotkeys: {
+            follow: "CommandOrControl+Alt+F",
+            focus: "CommandOrControl+Alt+P",
             sleep: "CommandOrControl+Alt+S",
             laptop: "CommandOrControl+Alt+W",
             game: "CommandOrControl+Alt+G",
@@ -122,6 +166,24 @@ export default class Pets extends Phaser.Scene {
     // last time the user hovered / clicked / dragged a pet
     private lastInteraction: number = 0;
     private registeredHotkeys: string[] = [];
+
+    // what the computer is doing (polled from Rust)
+    private status: ISystemStatus | null = null;
+    private appCandidate: { state: string | null; since: number } = { state: null, since: 0 };
+    private lastAutoAt: { [state: string]: number } = {};
+    private lastSong: string = "";
+    private nextVibeAt: number = 0;
+    // focus timer
+    private focus: { phase: "work" | "break" | null; endsAt: number; sessions: number } = {
+        phase: null, endsAt: 0, sessions: 0,
+    };
+    // next time each wellbeing nudge is due
+    private nudgeDue: { [kind: string]: number } = {};
+    private lastTick: number = 0;
+    private lookTimer: number = 0;
+    private onStorage = (e: StorageEvent) => {
+        if (e.key === WARDROBE_KEY) this.wardrobeChanged();
+    };
     private readonly LINES: { [key: string]: string[] } = {
         sleepStart: ["*yawn* 😪", "Nap time…", "So sleepy… 💤"],
         sleepEnd: ["What a nap! ☀️", "*stretch* 🙆", "I'm refreshed!"],
@@ -144,6 +206,23 @@ export default class Pets extends Phaser.Scene {
         sadStart: ["*sniff* 🥲", "I need a hug 🥺", "Nobody plays with me…"],
         sadEnd: ["Feeling a bit better 🙂", "*sniff* okay…"],
         comforted: ["Thank you 🥹", "You're the best! 💖", "Hugs! 🤗"],
+        away: ["Zzz… wake me when you're back 💤", "*yawn* I'll nap till you return"],
+        welcomeBack: ["Welcome back! 👋", "You're back! 😊", "Missed you! 💖", "Good {time}! Welcome back ✨"],
+        autoLaptop: ["Coding together! 💻", "I'll work too ⌨️", "Let's get stuff done! 💪"],
+        autoMovie: ["Ooh, what are we watching? 🍿", "Movie buddy! 🎬", "Popcorn time! 🍿"],
+        autoGame: ["Can I play too? 🎮", "Game on! 🕹️", "Go go go! 🎮"],
+        song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
+        followOn: ["I'll follow you! 🐾", "Lead the way! 🐾"],
+        followOff: ["Okay, I'll hang out here 🙂", "Staying put! 🐾"],
+        focusStart: ["Focus time! 🍅 Let's go", "Deep work mode 🍅", "Focus! I'll work with you 🍅"],
+        focusDone: ["🍅 Done! Take a break ☕", "Great focus! Break time ☕", "Nice work! Stretch a bit ☕"],
+        breakOver: ["Break's over! Ready? 💪", "Back at it? Press Ctrl+Alt+P 💪"],
+        focusStopped: ["Focus stopped. Good effort! 🙂", "Okay, pausing focus 🙂"],
+        water: ["Time for some water 💧", "Stay hydrated! 🥤", "Water break! 💧"],
+        stretch: ["Stretch break! 🙆", "Roll your shoulders 🧘", "Stand up and stretch! 🙆"],
+        eyes: ["Eye break: look 20 ft away for 20 s 👀", "Rest your eyes a moment 😌", "Blink blink! Look far away 👀"],
+        newOutfit: ["Yayy! I got {item}! 😍", "Ooh, {item}! Do I look cute? ✨", "Thank you for {item}! 💖"],
+        birthday: ["Happy birthday!! 🎂🎉", "It's your birthday! 🥳🎂"],
         attentionStart: ["Hey! Look at me! 👀", "Psst… 👉👈", "Play with me!", "Notice me! ✨", "Helloooo? 👋"],
         noticed: ["Yay! You noticed! 💖", "Hehe, hi! 😊", "Finally! 🥳"],
         modeOff: ["Back to normal! 🙂", "Okay, I'm free!", "What's next? ✨"],
@@ -221,6 +300,19 @@ export default class Pets extends Phaser.Scene {
         this.lastInteraction = this.time.now;
         this.registerHotkeys();
         this.events.once("destroy", () => this.unregisterHotkeys());
+
+        // companion features: what the computer is doing, outfits, reminders
+        this.time.addEvent({ delay: 2000, loop: true, callback: () => this.pollSystem() });
+        window.addEventListener("storage", this.onStorage);
+        this.events.once("destroy", () => window.removeEventListener("storage", this.onStorage));
+        const nudges = this.personality().nudges;
+        for (const kind of Object.keys(nudges)) this.nudgeDue[kind] = Date.now() + nudges[kind] * 60000;
+        if (isBirthday()) {
+            this.time.delayedCall(4000, () => this.forEachAvatar((pet) => {
+                this.showBubble(pet, this.pick(this.LINES.birthday), 5000);
+                this.playReaction(pet, "dance", true);
+            }));
+        }
 
         // click on a pet -> it reacts (greet / dance / spin)
         this.input.on(
@@ -440,6 +532,9 @@ export default class Pets extends Phaser.Scene {
                         this.petScale = event.payload.value as number;
                         this.scaleAllPets(this.petScale);
                         break;
+                    case DispatchType.WardrobeChanged:
+                        this.wardrobeChanged();
+                        break;
                     default:
                         break;
                 }
@@ -452,6 +547,15 @@ export default class Pets extends Phaser.Scene {
     update(time: number, delta: number): void {
         this.frameCount += delta;
         this.updateAvatars(time);
+        this.lookTimer += delta;
+        if (this.lookTimer >= 250) {
+            this.lookTimer = 0;
+            this.updateLookAndFollow();
+        }
+        if (time - this.lastTick >= 1000) {
+            this.lastTick = time;
+            this.tickCompanion();
+        }
         this.positionBubbles();
 
         if (this.frameCount >= this.UPDATE_DELAY) {
@@ -512,6 +616,7 @@ export default class Pets extends Phaser.Scene {
         this.pets = this.pets.filter((pet: Pet, index: number) => {
             if (pet.id === petId) {
                 this.clearBubble(pet);
+                this.setTimerPill(pet, null);
                 pet.destroy();
 
                 // get pet that use the same texture as the pet that is destroyed
@@ -761,7 +866,7 @@ export default class Pets extends Phaser.Scene {
     }
 
     playRandomState(pet: Pet): void {
-        if (!pet.canPlayRandomState || pet.activity) return;
+        if (!pet.canPlayRandomState || pet.activity || pet.follow) return;
 
         // avatars pick from their own weighted list, including long activities
         if (pet.isAvatar && this.playAvatarRandomState(pet)) return;
@@ -884,8 +989,8 @@ export default class Pets extends Phaser.Scene {
         if (!pet) {
             return;
         }
-        // busy sleeping / working / gaming: don't wander off
-        if (pet.activity) return;
+        // busy sleeping / working / gaming / following the cursor: don't wander off
+        if (pet.activity || pet.follow) return;
 
         switch (pet.anims.getName()) {
             case this.configManager.getStateName("climb", pet):
@@ -1138,6 +1243,9 @@ export default class Pets extends Phaser.Scene {
             weights: { ...d.weights, ...(own.weights ?? {}) },
             durations: { ...d.durations, ...(own.durations ?? {}) },
             hotkeys: { ...d.hotkeys, ...(own.hotkeys ?? {}) },
+            apps: { ...d.apps, ...(own.apps ?? {}) },
+            focus: { ...d.focus, ...(own.focus ?? {}) },
+            nudges: { ...d.nudges, ...(own.nudges ?? {}) },
         };
     }
 
@@ -1196,6 +1304,10 @@ export default class Pets extends Phaser.Scene {
                 pet.lastGreetAt = this.time.now;
                 return;
             case "laptop":
+                if (this.focus.phase === "work") {
+                    this.showBubble(pet, `Focus! 🍅 ${this.formatLeft()} left`);
+                    return;
+                }
                 this.showBubble(pet, this.pick(this.LINES.laptopBusy));
                 return;
             case "game":
@@ -1327,6 +1439,8 @@ export default class Pets extends Phaser.Scene {
         pet.activity = undefined;
         pet.activityUntil = undefined;
         pet.mode = false;
+        pet.autoActivity = false;
+        pet.awayMode = false;
         pet.canPlayRandomState = true;
         if (!finished || !was) return;
 
@@ -1369,7 +1483,8 @@ export default class Pets extends Phaser.Scene {
             } else {
                 // ignored for a while? start asking for attention
                 const after = this.personality(pet).attentionAfter;
-                if (after > 0 && time - this.lastInteraction > after * 60000 && this.canStartActivity(pet)) {
+                const userPresent = !this.status || this.status.idle_ms < 60000;
+                if (after > 0 && userPresent && time - this.lastInteraction > after * 60000 && this.canStartActivity(pet)) {
                     this.startActivity(pet, "attention");
                 }
             }
@@ -1473,12 +1588,19 @@ export default class Pets extends Phaser.Scene {
     positionBubbles(): void {
         const screenW = this.physics.world.bounds.width;
         for (const pet of this.pets) {
-            if (!pet || !pet.bubble) continue;
+            if (!pet) continue;
             const head = this.headPoint(pet);
+            let y = head.y - 2;
+            if (pet.timerPill) {
+                const half = pet.timerPill.width / 2;
+                pet.timerPill.setPosition(Phaser.Math.Clamp(head.x, half + 4, screenW - half - 4), Math.max(y, 28));
+                y -= pet.timerPill.height + 4;
+            }
+            if (!pet.bubble) continue;
             const half = pet.bubble.width / 2;
             // keep the bubble on screen
             const x = Phaser.Math.Clamp(head.x, half + 4, screenW - half - 4);
-            pet.bubble.setPosition(x, Math.max(head.y - 2, pet.bubble.height + 4));
+            pet.bubble.setPosition(x, Math.max(y, pet.bubble.height + 4));
         }
     }
 
@@ -1519,6 +1641,323 @@ export default class Pets extends Phaser.Scene {
         this.tweens.add({ targets: p, alpha: 1, duration: 250, yoyo: true, hold: 1100 });
     }
 
+    // ---------- companion: cursor, computer awareness, focus, nudges, reminders, wardrobe ----------
+
+    forEachAvatar(fn: (pet: Pet) => void): void {
+        for (const pet of this.pets) if (pet && pet.isAvatar && pet.anims) fn(pet);
+    }
+
+    // a pet that isn't busy with anything
+    isFree(pet: Pet): boolean {
+        return !pet.activity && !pet.pendingActivity && pet.canPlayRandomState !== false && this.isOnGround(pet);
+    }
+
+    // look at the cursor when it's near; walk after it in follow mode
+    updateLookAndFollow(): void {
+        const mouse = this.inputManager.getMouse();
+        if (mouse.x < 0) return;
+        const recent = Date.now() - mouse.movedAt < 6000;
+
+        this.forEachAvatar((pet) => {
+            if (pet.activity || pet.pendingActivity || !this.isOnGround(pet)) return;
+            const state = this.currentState(pet);
+            const dx = mouse.x - pet.x;
+            const head = this.headPoint(pet);
+            const above = mouse.y < head.y - 30 && Math.abs(dx) < 160;
+
+            if (pet.follow) {
+                if (Math.abs(dx) > 80) {
+                    this.setPetLookToTheLeft(pet, dx < 0);
+                    if (state !== "walk") this.switchState(pet, "walk");
+                    else this.updateDirection(pet, dx < 0 ? Direction.LEFT : Direction.RIGHT);
+                } else {
+                    this.setPetLookToTheLeft(pet, dx < 0);
+                    this.switchState(pet, above ? "lookup" : "look");
+                }
+                return;
+            }
+
+            if (!["stand", "idle", "look", "lookup"].includes(state)) return;
+            const near = Math.abs(dx) < 500 && mouse.y > pet.y - 500;
+            if (recent && near) {
+                if (Math.abs(dx) > 15) this.setPetLookToTheLeft(pet, dx < 0);
+                const want = above ? "lookup" : "look";
+                if (state !== want) this.switchState(pet, want);
+            } else if (state === "look" || state === "lookup") {
+                this.switchState(pet, "stand");
+            }
+        });
+    }
+
+    async pollSystem(): Promise<void> {
+        try {
+            this.status = await invoke<ISystemStatus>("get_system_status");
+        } catch {
+            this.status = null; // not available (e.g. not Windows): features stay quiet
+            return;
+        }
+        const status = this.status;
+        const p = this.personality();
+        const now = this.time.now;
+
+        // ---- away detection
+        const away = p.awayAfter > 0 && status.idle_ms >= p.awayAfter * 60000;
+        this.forEachAvatar((pet) => {
+            if (away && !pet.awayMode && !(pet.mode && !pet.awayMode) && this.focus.phase !== "work") {
+                if (pet.activity) this.endActivity(pet);
+                this.startActivity(pet, "sleep", true, this.pick(this.LINES.away));
+                pet.awayMode = true; // also when the nap is pending until it lands
+            } else if (!away && pet.awayMode && status.idle_ms < 5000) {
+                pet.pendingActivity = undefined;
+                this.endActivity(pet);
+                this.switchState(pet, "stand");
+                this.showBubble(pet, this.pick(this.LINES.welcomeBack).replace("{time}", this.timeOfDay()));
+                this.time.delayedCall(600, () => this.playReaction(pet, "greet"));
+                pet.lastGreetAt = now;
+                this.lastInteraction = now;
+            }
+        });
+        if (away) return;
+
+        // ---- app awareness: join in with what you're doing
+        const app = status.app.toLowerCase();
+        const own = app.includes("windowpet") || app.includes("window_pet");
+        if (!own) {
+            const title = status.title.toLowerCase();
+            let match: string | null = null;
+            for (const [state, patterns] of Object.entries(p.apps)) {
+                if (patterns.some((pat) => {
+                    const q = pat.toLowerCase();
+                    return q.endsWith(".exe") ? app === q : title.includes(q) || app.includes(q);
+                })) {
+                    match = state;
+                    break;
+                }
+            }
+            if (match !== this.appCandidate.state) this.appCandidate = { state: match, since: now };
+        }
+        const target = this.appCandidate.state;
+        const settled = now - this.appCandidate.since >= 5000;
+
+        this.forEachAvatar((pet) => {
+            // left the app it was joining in with
+            if (pet.autoActivity && pet.activity !== target && settled) {
+                this.endActivity(pet);
+                this.switchState(pet, "stand");
+                return;
+            }
+            if (!target || !settled || !this.isFree(pet)) return;
+            if (now - (this.lastAutoAt[target] ?? -Infinity) < p.appCooldown * 60000) return;
+            const lines = this.LINES[`auto${target[0].toUpperCase()}${target.slice(1)}`];
+            if (this.startActivity(pet, target, false, lines ? this.pick(lines) : undefined)) {
+                pet.autoActivity = true;
+                this.lastAutoAt[target] = now;
+            }
+        });
+
+        // ---- music: dance along, notice new songs
+        const media = status.media;
+        // videos (YouTube, Netflix…) also report as "playing": that's movie time, not music
+        const watching = target === "movie" || this.pets.some((pet) => pet?.activity === "movie");
+        if (p.music && media.playing && media.title && !watching) {
+            const song = `${media.title}|${media.artist}`;
+            const isNew = song !== this.lastSong;
+            this.lastSong = song;
+            this.forEachAvatar((pet) => {
+                if (isNew) {
+                    const name = media.title.length > 28 ? `${media.title.slice(0, 27)}…` : media.title;
+                    this.showBubble(pet, `${this.pick(this.LINES.song)}\n♪ ${name}`, 3500);
+                }
+                if (!this.isFree(pet)) return;
+                if (isNew || now >= this.nextVibeAt) {
+                    this.playReaction(pet, "dance");
+                    this.nextVibeAt = now + Phaser.Math.Between(18000, 32000);
+                } else if (Math.random() < 0.5) {
+                    this.spawnParticle(pet, "dance", this.PARTICLES.dance);
+                }
+            });
+        }
+    }
+
+    // every second: focus timer, nudges, reminders
+    tickCompanion(): void {
+        const nowMs = Date.now();
+        const p = this.personality();
+
+        // ---- focus timer
+        if (this.focus.phase) {
+            const left = this.focus.endsAt - nowMs;
+            if (left <= 0) this.focusPhaseDone();
+            else {
+                const icon = this.focus.phase === "work" ? "🍅" : "☕";
+                this.forEachAvatar((pet) => this.setTimerPill(pet, `${icon} ${this.formatLeft()}`));
+            }
+        }
+
+        // ---- wellbeing nudges (paused while you're away or in a focus block)
+        const paused = (this.status && this.status.idle_ms > 60000) || this.focus.phase === "work";
+        for (const [kind, minutes] of Object.entries(p.nudges)) {
+            if (!minutes) continue;
+            if (paused) {
+                this.nudgeDue[kind] = (this.nudgeDue[kind] ?? nowMs) + 1000;
+                continue;
+            }
+            if (!this.nudgeDue[kind]) this.nudgeDue[kind] = nowMs + minutes * 60000;
+            if (nowMs >= this.nudgeDue[kind]) {
+                this.nudgeDue[kind] = nowMs + minutes * 60000;
+                this.deliver(this.pick(this.LINES[kind] ?? ["Take care of yourself 💖"]), 7000);
+                break; // one nudge at a time
+            }
+        }
+
+        // ---- reminders set in Settings
+        const reminders = loadReminders();
+        const due = reminders.filter((r) => r.at <= nowMs);
+        if (due.length) {
+            saveReminders(reminders.filter((r) => r.at > nowMs));
+            due.forEach((r, k) => {
+                const missed = nowMs - r.at > 120000 ? " (missed)" : "";
+                this.time.delayedCall(k * 4000, () => this.deliver(`⏰ ${r.text}${missed}`, 15000, true));
+            });
+        }
+    }
+
+    // a pet says something important: hop to get noticed, then the message
+    deliver(text: string, duration: number, urgent: boolean = false): void {
+        this.forEachAvatar((pet) => {
+            if (pet.awayMode && !urgent) return;
+            if (pet.awayMode) {
+                this.endActivity(pet);
+                this.switchState(pet, "stand");
+            }
+            this.showBubble(pet, text, duration);
+            if (this.isFree(pet)) this.playReaction(pet, urgent ? "attention" : "greet");
+            if (urgent) this.spawnParticle(pet, "attention", { texts: ["⏰", "❗"], colors: ["#e8433f", "#ffb02e"] });
+        });
+    }
+
+    formatLeft(): string {
+        const left = Math.max(0, Math.round((this.focus.endsAt - Date.now()) / 1000));
+        return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    }
+
+    startFocus(): void {
+        const f = this.personality().focus;
+        this.focus.phase = "work";
+        this.focus.endsAt = Date.now() + (f.work ?? 25) * 60000;
+        this.forEachAvatar((pet) => {
+            if (pet.activity) this.endActivity(pet);
+            pet.follow = false;
+            this.startActivity(pet, "laptop", true, `${this.pick(this.LINES.focusStart)} (${f.work} min)`);
+        });
+    }
+
+    stopFocus(): void {
+        this.focus.phase = null;
+        this.forEachAvatar((pet) => {
+            this.setTimerPill(pet, null);
+            if (pet.mode && pet.activity === "laptop") this.endActivity(pet);
+            this.switchState(pet, "stand");
+            this.showBubble(pet, this.pick(this.LINES.focusStopped));
+        });
+    }
+
+    focusPhaseDone(): void {
+        const f = this.personality().focus;
+        if (this.focus.phase === "work") {
+            this.focus.sessions++;
+            const long = f.longEvery && this.focus.sessions % f.longEvery === 0;
+            const minutes = long ? f.longBreak ?? 15 : f.break ?? 5;
+            this.focus.phase = "break";
+            this.focus.endsAt = Date.now() + minutes * 60000;
+            this.forEachAvatar((pet) => {
+                if (pet.mode && pet.activity === "laptop") this.endActivity(pet);
+                this.switchState(pet, "stand");
+                this.showBubble(pet, `${this.pick(this.LINES.focusDone)} (${minutes} min) · 🍅×${this.focus.sessions}`, 6000);
+                this.time.delayedCall(500, () => this.playReaction(pet, "dance"));
+            });
+        } else {
+            if (f.autoNext) {
+                this.startFocus();
+                return;
+            }
+            this.focus.phase = null;
+            this.forEachAvatar((pet) => {
+                this.setTimerPill(pet, null);
+                this.showBubble(pet, this.pick(this.LINES.breakOver), 6000);
+                this.playReaction(pet, "attention");
+            });
+        }
+    }
+
+    // small dark pill with the focus countdown, shown above the head
+    setTimerPill(pet: Pet, text: string | null): void {
+        if (!text) {
+            pet.timerPill?.destroy();
+            pet.timerPill = null;
+            return;
+        }
+        if (pet.timerPill) {
+            const label = pet.timerPill.list[1] as Phaser.GameObjects.Text;
+            if (label.text === text) return;
+            label.setText(text);
+            return;
+        }
+        const label = this.add
+            .text(0, 0, text, {
+                fontFamily: '"Segoe UI Emoji", "Segoe UI", sans-serif',
+                fontSize: "12px",
+                fontStyle: "bold",
+                color: "#ffffff",
+            })
+            .setOrigin(0.5, 1)
+            .setResolution(window.devicePixelRatio || 1);
+        const w = 66, h = 20;
+        const g = this.add.graphics();
+        g.fillStyle(0x3b2f2f, 0.88);
+        g.fillRoundedRect(-w / 2, -h, w, h, 10);
+        label.setPosition(0, -3);
+        pet.timerPill = this.add.container(0, 0, [g, label]).setDepth(10).setSize(w, h);
+    }
+
+    // rebuild avatar sprite sheets with the new outfit and react to it
+    wardrobeChanged(): void {
+        const outfit = effectiveWardrobe();
+        // Settings both saves and sends an event: only rebuild once per change
+        if (JSON.stringify(outfit) === JSON.stringify(this.lastOutfit)) return;
+        const seen = new Set<string>();
+        for (const sprite of this.configManager.getSpriteConfig()) {
+            if (!sprite.avatar || seen.has(sprite.name)) continue;
+            seen.add(sprite.name);
+            const name = sprite.name;
+            const users = this.pets.filter((pet) => pet && pet.texture?.key === name);
+            const states = users.map((pet) => this.currentState(pet));
+
+            for (const def of AVATAR_STATE_DEFS) this.anims.remove(`${def.state}-${name}`);
+            if (this.textures.exists(name)) this.textures.remove(name);
+            avatarMeta.delete(name);
+            createAvatarTexture(this.textures, this.anims, name, { ...sprite.avatar, wardrobe: outfit });
+
+            users.forEach((pet, k) => {
+                pet.setTexture(name);
+                pet.anims.play({ key: `${states[k] || "stand"}-${name}`, repeat: -1 });
+            });
+        }
+
+        const item = describeNewItem(this.lastOutfit, outfit);
+        this.lastOutfit = outfit;
+        if (!item) return;
+        this.forEachAvatar((pet) => {
+            this.showBubble(pet, this.pick(this.LINES.newOutfit).replace("{item}", item), 3500);
+            if (this.isOnGround(pet) && !pet.mode) {
+                if (pet.activity) this.endActivity(pet);
+                this.playReaction(pet, "spin", true);
+            }
+            this.spawnParticle(pet, "attention", { texts: ["✨", "💖", "⭐"], colors: ["#ff6b9a", "#ffb02e"] });
+        });
+    }
+    private lastOutfit: IWardrobe = effectiveWardrobe();
+
     // ---------- keyboard shortcuts ----------
 
     async registerHotkeys(): Promise<void> {
@@ -1548,6 +1987,18 @@ export default class Pets extends Phaser.Scene {
 
     onHotkey(action: string): void {
         this.lastInteraction = this.time.now;
+        if (action === "focus") {
+            this.focus.phase ? this.stopFocus() : this.startFocus();
+            return;
+        }
+        if (action === "follow") {
+            this.forEachAvatar((pet) => {
+                pet.follow = !pet.follow;
+                this.showBubble(pet, this.pick(pet.follow ? this.LINES.followOn : this.LINES.followOff));
+                if (!pet.follow && this.currentState(pet) === "walk") this.switchState(pet, "stand");
+            });
+            return;
+        }
         for (const pet of this.pets) {
             if (!pet || !pet.isAvatar || !pet.anims) continue;
 

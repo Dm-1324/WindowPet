@@ -15,6 +15,8 @@ import {
   IconSettings,
   IconBuildingStore,
   IconPaw,
+  IconShirt,
+  IconAlarm,
 } from '@tabler/icons-react';
 import Logo from './ui/components/Logo';
 import SettingTabs from './ui/shell/SettingTabs';
@@ -36,6 +38,8 @@ import useInit from './hooks/useInit';
 import { checkForUpdate } from './utils/update';
 import { DispatchType } from './types/IEvents';
 import AddPet from './ui/setting_tabs/AddPet';
+import Wardrobe from './ui/setting_tabs/Wardrobe';
+import Reminders from './ui/setting_tabs/Reminders';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 
@@ -106,6 +110,22 @@ function SettingWindow() {
       Icon: <IconInfoCircle size="1rem" />,
       label: t('About'),
       tab: ESettingTab.About,
+    },
+    {
+      Component: Wardrobe,
+      title: t("Wardrobe"),
+      description: t("Dress up your avatar: hats, glasses, headphones and t-shirts"),
+      Icon: <IconShirt size="1rem" />,
+      label: t('Wardrobe'),
+      tab: ESettingTab.Wardrobe,
+    },
+    {
+      Component: Reminders,
+      title: t("Reminders"),
+      description: t("Your pet will hop up and tell you when it's time"),
+      Icon: <IconAlarm size="1rem" />,
+      label: t('Reminders'),
+      tab: ESettingTab.Reminders,
     },
   ]), [language, pets.length]);
   let CurrentSettingTab = settingTabs[activeTab]?.Component;

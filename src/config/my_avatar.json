@@ -50,12 +50,7 @@
             }
         ],
         "personality": {
-            "greetings": [
-                "Good {time}!",
-                "Hi there! 👋",
-                "Oh, hello! 😊",
-                "Hey! Missed you ✨"
-            ],
+            "greetings": ["Good {time}!", "Hi there! 👋", "Oh, hello! 😊", "Hey! Missed you ✨"],
             "weights": {
                 "walk": 30,
                 "stand": 12,
@@ -80,7 +75,10 @@
             },
             "nightSleepBoost": 5,
             "attentionAfter": 8,
+            "awayAfter": 3,
             "hotkeys": {
+                "follow": "CommandOrControl+Alt+F",
+                "focus": "CommandOrControl+Alt+P",
                 "sleep": "CommandOrControl+Alt+S",
                 "laptop": "CommandOrControl+Alt+W",
                 "game": "CommandOrControl+Alt+G",
@@ -88,6 +86,25 @@
                 "dance": "CommandOrControl+Alt+D",
                 "greet": "CommandOrControl+Alt+H",
                 "normal": "CommandOrControl+Alt+N"
+            },
+            "apps": {
+                "laptop": ["code.exe", "idea64.exe", "springtoolsuite4.exe", "pycharm64.exe", "devenv.exe", "windowsterminal.exe", "postman.exe", "winword.exe", "excel.exe", "powerpnt.exe"],
+                "movie": ["vlc.exe", "youtube", "netflix", "prime video", "hotstar", "jiocinema"],
+                "game": ["steam.exe", "epicgameslauncher.exe", "minecraft", "valorant"]
+            },
+            "appCooldown": 2,
+            "music": true,
+            "focus": {
+                "work": 25,
+                "break": 5,
+                "longBreak": 15,
+                "longEvery": 4,
+                "autoNext": false
+            },
+            "nudges": {
+                "water": 60,
+                "stretch": 45,
+                "eyes": 20
             },
             "bubble": {
                 "fill": "#FFF6E5",

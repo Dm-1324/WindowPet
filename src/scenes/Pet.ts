@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { IPet } from "../types/IPet";
 import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
 import { avatarPartKey, avatarSourceKey, createAvatarTexture } from "./avatar";
+import { effectiveWardrobe } from "../utils/companion";
 
 export class Pet extends Phaser.Scene {
     private pet: IPet | null = null;
@@ -41,7 +42,7 @@ export class Pet extends Phaser.Scene {
         let fitScale = 1;
         if (this.sprite!.avatar) {
             // generated sheet + animations; shrink the preview to fit the card
-            const frameSize = createAvatarTexture(this.textures, this.anims, this.sprite!.name, this.sprite!.avatar) ?? 1;
+            const frameSize = createAvatarTexture(this.textures, this.anims, this.sprite!.name, { ...this.sprite!.avatar, wardrobe: effectiveWardrobe() }) ?? 1;
             fitScale = Math.min(1, (Math.min(this.scale.width, this.scale.height) * 0.95) / frameSize);
         } else {
             // register state animations

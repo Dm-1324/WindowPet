@@ -3,6 +3,7 @@ import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
 import { appWindow } from "@tauri-apps/api/window";
 import { error } from "tauri-plugin-log-api";
 import { avatarPartKey, avatarSourceKey, createAvatarTexture, AVATAR_STATES } from "./avatar";
+import { effectiveWardrobe } from "../utils/companion";
 
 export class ConfigManager {
     // Config for sprite sheet that's going to be loaded
@@ -101,7 +102,7 @@ export class ConfigManager {
             this.textures,
             this.anims,
             sprite.name,
-            sprite.avatar
+            { ...sprite.avatar, wardrobe: effectiveWardrobe() }
         );
         if (frameSize !== null) {
             sprite.frameSize = frameSize;
@@ -316,6 +317,12 @@ export class InputManager {
     private onPetHover:
         | ((obj: Phaser.GameObjects.GameObject, x: number) => void)
         | null = null;
+    // last known cursor position (game coordinates) and when it last moved
+    private mouse = { x: -1, y: -1, movedAt: 0 };
+
+    public getMouse(): { x: number; y: number; movedAt: number } {
+        return this.mouse;
+    }
 
     public setOnPetHover(
         callback: (obj: Phaser.GameObjects.GameObject, x: number) => void
@@ -333,6 +340,11 @@ export class InputManager {
         try {
             invoke("get_mouse_position").then((event: any) => {
                 const hits = this.detectMouseOverPet(event.clientX, event.clientY);
+                const mx = this.input!.mousePointer.x;
+                const my = this.input!.mousePointer.y;
+                if (Math.abs(mx - this.mouse.x) + Math.abs(my - this.mouse.y) > 3) {
+                    this.mouse = { x: mx, y: my, movedAt: Date.now() };
+                }
 
                 // notify about pets the mouse just moved onto
                 const now = new Set(hits);
