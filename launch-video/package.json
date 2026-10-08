@@ -1,0 +1,23 @@
+{
+  "name": "windowpet-launch-video",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Launch video for WindowPet: Custom Avatar Edition, made with Remotion",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render WindowPetLaunch out/windowpet-launch.mp4",
+    "export-frames": "node scripts/export-frames.cjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.534",
+    "@types/react": "^18.3.31",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.534",
+    "typescript": "^7.0.2"
+  },
+  "devDependencies": {
+    "canvas": "^3.2.3",
+    "esbuild": "^0.28.2"
+  }
+}

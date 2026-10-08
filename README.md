@@ -17,6 +17,8 @@
 
 ![Your pet in different moods and activities](./docs/preview.png)
 
+🎬 **[Watch the 45-second launch video](./docs/launch-video.mp4)**
+
 ## ✨ What it does
 
 **A living avatar from a single image**
@@ -90,6 +92,8 @@ npm install
 npm run tauri dev      # run with live reload
 npm run tauri build    # build the installer -> src-tauri/target/release/bundle/
 ```
+
+The launch video lives in [`launch-video/`](./launch-video) (made with Remotion).
 
 Releases are built by GitHub Actions: **Actions → Build Windows installer → Run workflow** creates a release for the version in `src-tauri/tauri.conf.json`.
 

@@ -1,0 +1,106 @@
+{
+  "states": {
+    "stand": {
+      "frames": 24,
+      "fps": 8
+    },
+    "idle": {
+      "frames": 24,
+      "fps": 8
+    },
+    "look": {
+      "frames": 24,
+      "fps": 8
+    },
+    "lookup": {
+      "frames": 16,
+      "fps": 8
+    },
+    "walk": {
+      "frames": 24,
+      "fps": 12
+    },
+    "sit": {
+      "frames": 24,
+      "fps": 6
+    },
+    "sleep": {
+      "frames": 16,
+      "fps": 4
+    },
+    "laptop": {
+      "frames": 24,
+      "fps": 8
+    },
+    "game": {
+      "frames": 24,
+      "fps": 10
+    },
+    "movie": {
+      "frames": 24,
+      "fps": 8
+    },
+    "angry": {
+      "frames": 16,
+      "fps": 12
+    },
+    "sad": {
+      "frames": 24,
+      "fps": 6
+    },
+    "attention": {
+      "frames": 16,
+      "fps": 12
+    },
+    "happy": {
+      "frames": 16,
+      "fps": 12
+    },
+    "eat": {
+      "frames": 16,
+      "fps": 10
+    },
+    "greet": {
+      "frames": 16,
+      "fps": 12
+    },
+    "dance": {
+      "frames": 16,
+      "fps": 12
+    },
+    "spin": {
+      "frames": 10,
+      "fps": 14
+    },
+    "jump": {
+      "frames": 2,
+      "fps": 4
+    },
+    "fall": {
+      "frames": 5,
+      "fps": 12
+    },
+    "drag": {
+      "frames": 8,
+      "fps": 10
+    },
+    "climb": {
+      "frames": 8,
+      "fps": 10
+    },
+    "crawl": {
+      "frames": 8,
+      "fps": 10
+    }
+  },
+  "variants": [
+    "base",
+    "party",
+    "cool",
+    "cozy",
+    "sporty"
+  ],
+  "frameSize": 344,
+  "headTopRatio": 0.23546511627906977,
+  "totalFrames": 385
+}
