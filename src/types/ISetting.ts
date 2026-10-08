@@ -21,6 +21,7 @@ export enum ESettingTab {
     About = 4,
     Wardrobe = 5,
     Reminders = 6,
+    Companion = 7,
 }
 
 export interface ISettingTabs {

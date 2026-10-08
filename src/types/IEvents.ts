@@ -30,4 +30,5 @@ export enum DispatchType {
     ChangePetScale = 'Change pet scale',
     WardrobeChanged = 'Wardrobe changed',
     RemindersChanged = 'Reminders changed',
+    CompanionChanged = 'Companion settings changed',
 }

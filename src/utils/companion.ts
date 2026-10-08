@@ -125,3 +125,106 @@ export function describeNewItem(before: IWardrobe, after: IWardrobe): string | n
     }
     return null;
 }
+
+// ---------- companion feature switches (Settings → Companion) ----------
+
+export const COMPANION_KEY = "windowpet.companion";
+
+export interface ICompanionSettings {
+    // walk after the mouse cursor
+    follow: boolean;
+    // turn and look at the cursor when it's near
+    lookAtCursor: boolean;
+    // sleep / laptop / game / movie / sit on its own every now and then
+    randomActivities: boolean;
+    // join in with the app in front (coding, movies, games)
+    appAwareness: boolean;
+    // dance when music plays
+    music: boolean;
+    // nap when you're away from the keyboard
+    awayDetection: boolean;
+    // water / stretch / eye-break reminders
+    nudges: boolean;
+}
+
+export const DEFAULT_COMPANION: ICompanionSettings = {
+    follow: false,
+    lookAtCursor: true,
+    randomActivities: true,
+    appAwareness: true,
+    music: true,
+    awayDetection: true,
+    nudges: true,
+};
+
+export function loadCompanion(): ICompanionSettings {
+    return { ...DEFAULT_COMPANION, ...read<Partial<ICompanionSettings>>(COMPANION_KEY, {}) };
+}
+
+export function saveCompanion(settings: ICompanionSettings): void {
+    write(COMPANION_KEY, settings);
+}
+
+export const DEFAULT_HOTKEYS: { [action: string]: string } = {
+    follow: "CommandOrControl+Alt+F",
+    focus: "CommandOrControl+Alt+P",
+    sleep: "CommandOrControl+Alt+S",
+    laptop: "CommandOrControl+Alt+W",
+    game: "CommandOrControl+Alt+G",
+    movie: "CommandOrControl+Alt+M",
+    dance: "CommandOrControl+Alt+D",
+    greet: "CommandOrControl+Alt+H",
+    normal: "CommandOrControl+Alt+N",
+};
+
+// ---------- what's happening on the computer ----------
+
+export interface ISystemStatus {
+    idle_ms: number;
+    app: string;
+    title: string;
+    media: { playing: boolean; title: string; artist: string; app: string };
+}
+
+// which activity goes with which app; ".exe" entries match the program, others the window title
+export const DEFAULT_APPS: { [state: string]: string[] } = {
+    laptop: [
+        "code.exe", "idea64.exe", "springtoolsuite4.exe", "pycharm64.exe", "webstorm64.exe",
+        "devenv.exe", "sublime_text.exe", "notepad++.exe", "postman.exe",
+        "winword.exe", "excel.exe", "powerpnt.exe",
+    ],
+    movie: ["vlc.exe", "potplayermini64.exe", "youtube", "netflix", "prime video", "hotstar", "disney+", "jiocinema"],
+    game: ["steam.exe", "epicgameslauncher.exe", "robloxplayerbeta.exe", "minecraft", "valorant", "genshinimpact.exe"],
+};
+
+// music services: a "youtube" in these titles is music, not a movie
+const MUSIC_HINTS = ["spotify", "youtube music", "music.youtube", "apple music", "soundcloud", "jiosaavn", "gaana", "wynk", "amazon music", "deezer", "tidal"];
+
+export function isOwnApp(status: ISystemStatus): boolean {
+    const app = status.app.toLowerCase();
+    return app.includes("windowpet") || app.includes("window_pet");
+}
+
+export function isMusicContext(status: ISystemStatus): boolean {
+    const title = status.title.toLowerCase();
+    const source = status.media.app.toLowerCase();
+    return MUSIC_HINTS.some((h) => title.includes(h) || source.includes(h.split(" ")[0]));
+}
+
+// the activity that matches the app in front, or null
+export function matchApp(status: ISystemStatus, apps: { [state: string]: string[] }): string | null {
+    const app = status.app.toLowerCase();
+    const title = status.title.toLowerCase();
+    if (!app && !title) return null;
+    for (const [state, patterns] of Object.entries(apps)) {
+        // a music player in a browser tab is music time, not movie time
+        if (state === "movie" && isMusicContext(status)) continue;
+        const hit = patterns.some((pattern) => {
+            const q = pattern.toLowerCase().trim();
+            if (!q) return false;
+            return q.endsWith(".exe") ? app === q : title.includes(q);
+        });
+        if (hit) return state;
+    }
+    return null;
+}

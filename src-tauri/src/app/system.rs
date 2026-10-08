@@ -128,9 +128,28 @@ mod windows_impl {
             let _ = RoInitialize(RO_INIT_MULTITHREADED);
         }
         let manager = SessionManager::RequestAsync()?.get()?;
-        let session = match manager.GetCurrentSession() {
-            Ok(s) => s,
-            Err(_) => return Ok(MediaInfo::default()), // nothing playing anywhere
+
+        // several apps can have a media session (a paused browser tab + Spotify playing...):
+        // prefer one that is actually playing, otherwise fall back to the "current" one
+        let mut chosen = None;
+        if let Ok(sessions) = manager.GetSessions() {
+            for i in 0..sessions.Size().unwrap_or(0) {
+                if let Ok(s) = sessions.GetAt(i) {
+                    let playing = s
+                        .GetPlaybackInfo()
+                        .and_then(|info| info.PlaybackStatus())
+                        .map(|st| st == PlaybackStatus::Playing)
+                        .unwrap_or(false);
+                    if playing {
+                        chosen = Some(s);
+                        break;
+                    }
+                }
+            }
+        }
+        let session = match chosen.or_else(|| manager.GetCurrentSession().ok()) {
+            Some(s) => s,
+            None => return Ok(MediaInfo::default()), // nothing playing anywhere
         };
         let playing = session.GetPlaybackInfo()?.PlaybackStatus()? == PlaybackStatus::Playing;
         let props = session.TryGetMediaPropertiesAsync()?.get()?;

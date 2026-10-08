@@ -17,6 +17,7 @@ import {
   IconPaw,
   IconShirt,
   IconAlarm,
+  IconSparkles,
 } from '@tabler/icons-react';
 import Logo from './ui/components/Logo';
 import SettingTabs from './ui/shell/SettingTabs';
@@ -40,6 +41,7 @@ import { DispatchType } from './types/IEvents';
 import AddPet from './ui/setting_tabs/AddPet';
 import Wardrobe from './ui/setting_tabs/Wardrobe';
 import Reminders from './ui/setting_tabs/Reminders';
+import Companion from './ui/setting_tabs/Companion';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 
@@ -126,6 +128,14 @@ function SettingWindow() {
       Icon: <IconAlarm size="1rem" />,
       label: t('Reminders'),
       tab: ESettingTab.Reminders,
+    },
+    {
+      Component: Companion,
+      title: t("Companion"),
+      description: t("Choose what your pet reacts to, and see what it notices"),
+      Icon: <IconSparkles size="1rem" />,
+      label: t('Companion'),
+      tab: ESettingTab.Companion,
     },
   ]), [language, pets.length]);
   let CurrentSettingTab = settingTabs[activeTab]?.Component;

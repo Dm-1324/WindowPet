@@ -20,21 +20,24 @@ import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortc
 import { invoke } from "@tauri-apps/api/tauri";
 import { createAvatarTexture, AVATAR_STATE_DEFS } from "./avatar";
 import {
+    COMPANION_KEY,
+    DEFAULT_APPS,
+    DEFAULT_HOTKEYS,
     describeNewItem,
     effectiveWardrobe,
+    ICompanionSettings,
     isBirthday,
+    isMusicContext,
+    isOwnApp,
+    ISystemStatus,
+    loadCompanion,
     loadReminders,
+    matchApp,
+    saveCompanion,
     saveReminders,
     WARDROBE_KEY,
 } from "../utils/companion";
 import { IWardrobe } from "./avatar";
-
-interface ISystemStatus {
-    idle_ms: number;
-    app: string;
-    title: string;
-    media: { playing: boolean; title: string; artist: string; app: string };
-}
 
 interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     direction?: Direction;
@@ -131,30 +134,12 @@ export default class Pets extends Phaser.Scene {
         nightSleepBoost: 5,
         attentionAfter: 8,
         awayAfter: 3,
-        apps: {
-            laptop: [
-                "code.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "devenv.exe",
-                "springtoolsuite4.exe", "sublime_text.exe", "notepad++.exe", "windowsterminal.exe",
-                "winword.exe", "excel.exe", "powerpnt.exe", "postman.exe",
-            ],
-            movie: ["vlc.exe", "potplayermini64.exe", "youtube", "netflix", "prime video", "hotstar", "disney+", "jiocinema"],
-            game: ["steam.exe", "epicgameslauncher.exe", "robloxplayerbeta.exe", "minecraft", "valorant", "genshinimpact.exe"],
-        },
+        apps: DEFAULT_APPS,
         appCooldown: 2,
         music: true,
         focus: { work: 25, break: 5, longBreak: 15, longEvery: 4, autoNext: false },
         nudges: { water: 60, stretch: 45, eyes: 20 },
-        hotkeys: {
-            follow: "CommandOrControl+Alt+F",
-            focus: "CommandOrControl+Alt+P",
-            sleep: "CommandOrControl+Alt+S",
-            laptop: "CommandOrControl+Alt+W",
-            game: "CommandOrControl+Alt+G",
-            movie: "CommandOrControl+Alt+M",
-            dance: "CommandOrControl+Alt+D",
-            greet: "CommandOrControl+Alt+H",
-            normal: "CommandOrControl+Alt+N",
-        },
+        hotkeys: DEFAULT_HOTKEYS,
     };
     // states a keyboard shortcut can switch on as a lasting mode
     private readonly MODES: { [state: string]: string } = {
@@ -181,8 +166,12 @@ export default class Pets extends Phaser.Scene {
     private nudgeDue: { [kind: string]: number } = {};
     private lastTick: number = 0;
     private lookTimer: number = 0;
+    // feature switches from Settings → Companion
+    private companion: ICompanionSettings = loadCompanion();
+    private musicPlaying: boolean = false;
     private onStorage = (e: StorageEvent) => {
         if (e.key === WARDROBE_KEY) this.wardrobeChanged();
+        if (e.key === COMPANION_KEY) this.companionChanged();
     };
     private readonly LINES: { [key: string]: string[] } = {
         sleepStart: ["*yawn* 😪", "Nap time…", "So sleepy… 💤"],
@@ -535,6 +524,9 @@ export default class Pets extends Phaser.Scene {
                     case DispatchType.WardrobeChanged:
                         this.wardrobeChanged();
                         break;
+                    case DispatchType.CompanionChanged:
+                        this.companionChanged();
+                        break;
                     default:
                         break;
                 }
@@ -593,6 +585,7 @@ export default class Pets extends Phaser.Scene {
         // avatar frames are generated at their final size, so the default scale shows them 1:1 (sharp)
         this.pets[index].isAvatar = !!sprite.avatar;
         this.pets[index].personality = sprite.avatar?.personality;
+        this.pets[index].follow = !!sprite.avatar && this.companion.follow;
         this.pets[index].baseScale = sprite.avatar
             ? 1 / defaultSettings.petScale
             : 1;
@@ -1151,6 +1144,12 @@ export default class Pets extends Phaser.Scene {
     petBeyondScreenSwitchClimb(pet: Pet, worldBounding: IWorldBounding): void {
         if (!pet) return;
 
+        // following the cursor into a screen edge: just wait there
+        if (pet.follow && worldBounding.down && (worldBounding.left || worldBounding.right)) {
+            this.switchState(pet, "look");
+            return;
+        }
+
         // if pet is climb and crawl, we don't want to switch state again
         switch (pet.anims.getName()) {
             case this.configManager.getStateName("climb", pet):
@@ -1374,8 +1373,12 @@ export default class Pets extends Phaser.Scene {
         const p = this.personality(pet);
         const night = this.timeOfDay() === "night";
 
+        const calm = ["walk", "stand", "idle", "dance", "spin"];
         const options: [string, number][] = Object.entries(p.weights)
             .filter(([state, weight]) => weight > 0 && pet.availableStates.includes(state))
+            // long activities can be switched off; with music on it only grooves around
+            .filter(([state]) => !p.durations[state] || (this.companion.randomActivities && !this.musicPlaying))
+            .filter(([state]) => !this.musicPlaying || calm.includes(state))
             .map(([state, weight]) => [state, state === "sleep" && night ? weight * p.nightSleepBoost : weight]);
         if (options.length === 0) return false;
 
@@ -1484,7 +1487,7 @@ export default class Pets extends Phaser.Scene {
                 // ignored for a while? start asking for attention
                 const after = this.personality(pet).attentionAfter;
                 const userPresent = !this.status || this.status.idle_ms < 60000;
-                if (after > 0 && userPresent && time - this.lastInteraction > after * 60000 && this.canStartActivity(pet)) {
+                if (after > 0 && userPresent && !pet.follow && time - this.lastInteraction > after * 60000 && this.canStartActivity(pet)) {
                     this.startActivity(pet, "attention");
                 }
             }
@@ -1649,7 +1652,7 @@ export default class Pets extends Phaser.Scene {
 
     // a pet that isn't busy with anything
     isFree(pet: Pet): boolean {
-        return !pet.activity && !pet.pendingActivity && pet.canPlayRandomState !== false && this.isOnGround(pet);
+        return !pet.follow && !pet.activity && !pet.pendingActivity && pet.canPlayRandomState !== false && this.isOnGround(pet);
     }
 
     // look at the cursor when it's near; walk after it in follow mode
@@ -1659,7 +1662,13 @@ export default class Pets extends Phaser.Scene {
         const recent = Date.now() - mouse.movedAt < 6000;
 
         this.forEachAvatar((pet) => {
-            if (pet.activity || pet.pendingActivity || !this.isOnGround(pet)) return;
+            // following beats everything except modes you switched on yourself (and naps while you're away)
+            if (pet.follow && !pet.mode) {
+                if (pet.activity) this.endActivity(pet);
+                pet.pendingActivity = undefined;
+            }
+            // canStartActivity: on the ground, including "just landed" (finished fall animation)
+            if (pet.activity || pet.pendingActivity || !this.canStartActivity(pet)) return;
             const state = this.currentState(pet);
             const dx = mouse.x - pet.x;
             const head = this.headPoint(pet);
@@ -1678,6 +1687,10 @@ export default class Pets extends Phaser.Scene {
             }
 
             if (!["stand", "idle", "look", "lookup"].includes(state)) return;
+            if (!this.companion.lookAtCursor) {
+                if (state === "look" || state === "lookup") this.switchState(pet, "stand");
+                return;
+            }
             const near = Math.abs(dx) < 500 && mouse.y > pet.y - 500;
             if (recent && near) {
                 if (Math.abs(dx) > 15) this.setPetLookToTheLeft(pet, dx < 0);
@@ -1701,7 +1714,7 @@ export default class Pets extends Phaser.Scene {
         const now = this.time.now;
 
         // ---- away detection
-        const away = p.awayAfter > 0 && status.idle_ms >= p.awayAfter * 60000;
+        const away = this.companion.awayDetection && p.awayAfter > 0 && status.idle_ms >= p.awayAfter * 60000;
         this.forEachAvatar((pet) => {
             if (away && !pet.awayMode && !(pet.mode && !pet.awayMode) && this.focus.phase !== "work") {
                 if (pet.activity) this.endActivity(pet);
@@ -1720,21 +1733,15 @@ export default class Pets extends Phaser.Scene {
         if (away) return;
 
         // ---- app awareness: join in with what you're doing
-        const app = status.app.toLowerCase();
-        const own = app.includes("windowpet") || app.includes("window_pet");
-        if (!own) {
-            const title = status.title.toLowerCase();
-            let match: string | null = null;
-            for (const [state, patterns] of Object.entries(p.apps)) {
-                if (patterns.some((pat) => {
-                    const q = pat.toLowerCase();
-                    return q.endsWith(".exe") ? app === q : title.includes(q) || app.includes(q);
-                })) {
-                    match = state;
-                    break;
-                }
+        // (while you use WindowPet itself, remember the app you were in before)
+        if (!this.companion.appAwareness) {
+            if (this.appCandidate.state !== null) this.appCandidate = { state: null, since: now };
+        } else if (!isOwnApp(status)) {
+            const match = matchApp(status, p.apps);
+            if (match !== this.appCandidate.state) {
+                this.appCandidate = { state: match, since: now };
+                info(`Companion: ${status.app || "?"} -> ${match ?? "nothing"}`);
             }
-            if (match !== this.appCandidate.state) this.appCandidate = { state: match, since: now };
         }
         const target = this.appCandidate.state;
         const settled = now - this.appCandidate.since >= 5000;
@@ -1756,22 +1763,30 @@ export default class Pets extends Phaser.Scene {
         });
 
         // ---- music: dance along, notice new songs
+        // a video in front (YouTube, Netflix…) also counts as "playing": that's movie time, not music
         const media = status.media;
-        // videos (YouTube, Netflix…) also report as "playing": that's movie time, not music
-        const watching = target === "movie" || this.pets.some((pet) => pet?.activity === "movie");
-        if (p.music && media.playing && media.title && !watching) {
+        const videoInFront = target === "movie" && !isMusicContext(status);
+        const music = this.companion.music && p.music && media.playing && !videoInFront;
+        if (music !== this.musicPlaying) info(`Companion: music ${music ? `on (${media.app}: ${media.title})` : "off"}`);
+        this.musicPlaying = music;
+        if (music) {
             const song = `${media.title}|${media.artist}`;
             const isNew = song !== this.lastSong;
             this.lastSong = song;
             this.forEachAvatar((pet) => {
-                if (isNew) {
+                // drop whatever it was doing on its own to groove along
+                if (isNew && pet.activity && !pet.mode && !pet.autoActivity) this.endActivity(pet);
+                if (isNew && media.title) {
                     const name = media.title.length > 28 ? `${media.title.slice(0, 27)}…` : media.title;
                     this.showBubble(pet, `${this.pick(this.LINES.song)}\n♪ ${name}`, 3500);
                 }
-                if (!this.isFree(pet)) return;
+                if (!this.isFree(pet)) {
+                    if (!pet.activity && Math.random() < 0.4) this.spawnParticle(pet, "dance", this.PARTICLES.dance);
+                    return;
+                }
                 if (isNew || now >= this.nextVibeAt) {
                     this.playReaction(pet, "dance");
-                    this.nextVibeAt = now + Phaser.Math.Between(18000, 32000);
+                    this.nextVibeAt = now + Phaser.Math.Between(15000, 25000);
                 } else if (Math.random() < 0.5) {
                     this.spawnParticle(pet, "dance", this.PARTICLES.dance);
                 }
@@ -1795,7 +1810,8 @@ export default class Pets extends Phaser.Scene {
         }
 
         // ---- wellbeing nudges (paused while you're away or in a focus block)
-        const paused = (this.status && this.status.idle_ms > 60000) || this.focus.phase === "work";
+        const paused =
+            !this.companion.nudges || (this.status && this.status.idle_ms > 60000) || this.focus.phase === "work";
         for (const [kind, minutes] of Object.entries(p.nudges)) {
             if (!minutes) continue;
             if (paused) {
@@ -1958,6 +1974,46 @@ export default class Pets extends Phaser.Scene {
     }
     private lastOutfit: IWardrobe = effectiveWardrobe();
 
+    setFollow(on: boolean): void {
+        this.companion = { ...loadCompanion(), follow: on };
+        saveCompanion(this.companion);
+        this.forEachAvatar((pet) => {
+            pet.follow = on;
+            if (on && !pet.mode) {
+                if (pet.activity) this.endActivity(pet);
+                pet.pendingActivity = undefined;
+            }
+            this.showBubble(pet, this.pick(on ? this.LINES.followOn : this.LINES.followOff));
+            if (!on && ["walk", "look", "lookup"].includes(this.currentState(pet))) this.switchState(pet, "stand");
+        });
+    }
+
+    // switches changed in Settings → Companion
+    companionChanged(): void {
+        const before = this.companion;
+        this.companion = loadCompanion();
+        if (before.follow !== this.companion.follow) this.setFollow(this.companion.follow);
+        if (!this.companion.appAwareness) {
+            this.forEachAvatar((pet) => pet.autoActivity && this.endActivity(pet));
+        }
+        if (!this.companion.awayDetection) {
+            this.forEachAvatar((pet) => {
+                if (!pet.awayMode) return;
+                this.endActivity(pet);
+                this.switchState(pet, "stand");
+            });
+        }
+        if (!this.companion.randomActivities) {
+            // stop the long activity it started by itself (not modes, not app ones)
+            this.forEachAvatar((pet) => {
+                if (pet.activity && !pet.mode && !pet.autoActivity) {
+                    this.endActivity(pet);
+                    this.switchState(pet, "stand");
+                }
+            });
+        }
+    }
+
     // ---------- keyboard shortcuts ----------
 
     async registerHotkeys(): Promise<void> {
@@ -1992,11 +2048,7 @@ export default class Pets extends Phaser.Scene {
             return;
         }
         if (action === "follow") {
-            this.forEachAvatar((pet) => {
-                pet.follow = !pet.follow;
-                this.showBubble(pet, this.pick(pet.follow ? this.LINES.followOn : this.LINES.followOff));
-                if (!pet.follow && this.currentState(pet) === "walk") this.switchState(pet, "stand");
-            });
+            this.setFollow(!this.companion.follow);
             return;
         }
         for (const pet of this.pets) {

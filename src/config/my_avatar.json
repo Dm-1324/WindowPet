@@ -88,7 +88,7 @@
                 "normal": "CommandOrControl+Alt+N"
             },
             "apps": {
-                "laptop": ["code.exe", "idea64.exe", "springtoolsuite4.exe", "pycharm64.exe", "devenv.exe", "windowsterminal.exe", "postman.exe", "winword.exe", "excel.exe", "powerpnt.exe"],
+                "laptop": ["code.exe", "idea64.exe", "springtoolsuite4.exe", "pycharm64.exe", "devenv.exe", "postman.exe", "winword.exe", "excel.exe", "powerpnt.exe"],
                 "movie": ["vlc.exe", "youtube", "netflix", "prime video", "hotstar", "jiocinema"],
                 "game": ["steam.exe", "epicgameslauncher.exe", "minecraft", "valorant"]
             },
