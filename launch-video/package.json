@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "remotion studio",
     "render": "remotion render WindowPetLaunch out/windowpet-launch.mp4",
-    "export-frames": "node scripts/export-frames.cjs"
+    "export-frames": "node scripts/export-frames.cjs",
+    "make-audio": "python scripts/make-audio.py"
   },
   "dependencies": {
     "@remotion/cli": "^4.0.534",

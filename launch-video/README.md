@@ -9,6 +9,7 @@ The pet in the video uses the app's real animations: they are generated from `..
 cd launch-video
 npm install
 npm run export-frames   # renders the avatar's animation frames into public/frames
+npm run make-audio      # (optional) re-composes the music + sound effects, needs Python with numpy + scipy
 npm run dev             # opens Remotion Studio in the browser: preview, scrub, tweak
 npm run render          # writes out/windowpet-launch.mp4
 ```
@@ -24,8 +25,11 @@ Requirements: Node.js 16+ on Windows x64, macOS 15+ or Linux. Remotion downloads
 | `src/components.tsx` | Sprite (plays an avatar animation), taskbar, speech bubble, pills, floating emoji, cursor, app window |
 | `src/theme.ts` | Colours and fonts (Inter, bundled in `public/fonts`, OFL licensed) |
 | `scripts/export-frames.cjs` | Exports animation frames and outfit variants from the app's generator |
+| `scripts/make-audio.py` | Composes the background music and sound effects |
 
-To add music, put an MP3 in `public/` and add `<Audio src={staticFile("music.mp3")} />` inside `WindowPetLaunch` in `src/Video.tsx`.
+**Audio:** the music and sound effects in `public/audio/` are composed from scratch by `scripts/make-audio.py`
+(no samples or downloaded tracks), so they're free to use anywhere. Effects are placed on the timeline in the
+`SFX` list in `src/Video.tsx`. To use a different song, replace `public/audio/music.wav`.
 To use your own screen recordings, put an MP4 in `public/` and show it with `<OffthreadVideo src={staticFile("clip.mp4")} />` in a scene.
 
 ## License note
