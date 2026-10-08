@@ -3,6 +3,16 @@ import Phaser from "phaser";
 import Pets from "./scenes/Pets";
 import { useSettingStore } from "./hooks/useSettingStore";
 import { appWindow } from "@tauri-apps/api/window";
+import defaultPetConfig from "./config/pet_config";
+import { ISpriteConfig } from "./types/ISpriteConfig";
+
+// saved pets keep a copy of their config; for built-in avatars always use the latest one
+const withLatestAvatarConfig = (pets: ISpriteConfig[]): ISpriteConfig[] =>
+    pets.map((pet) => {
+        if (!pet.avatar || pet.type === "custom") return pet;
+        const latest = defaultPetConfig.find((p) => p.name === pet.name && p.avatar);
+        return latest ? { ...pet, ...JSON.parse(JSON.stringify(latest)), id: pet.id } : pet;
+    });
 
 function PhaserWrapper() {
     const phaserDom = useRef<HTMLDivElement>(null);
@@ -54,7 +64,7 @@ function PhaserWrapper() {
             },
             callbacks: {
                 preBoot: (game) => {
-                    game.registry.set('spriteConfig', pets);
+                    game.registry.set('spriteConfig', withLatestAvatarConfig(pets));
                     // game.registry.set('defaultPets', defaultPets);
                 }
             }
