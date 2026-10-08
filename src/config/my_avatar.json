@@ -14,10 +14,40 @@
         ],
         "eyeLineColor": "#3c2846",
         "parts": [
-            { "name": "armL", "src": "media/my_avatar_arm_l.png", "x": 0, "y": 235, "pivotX": 84, "pivotY": 27 },
-            { "name": "armR", "src": "media/my_avatar_arm_r.png", "x": 261, "y": 235, "pivotX": 15, "pivotY": 27 },
-            { "name": "legL", "src": "media/my_avatar_foot_l.png", "x": 92, "y": 382, "pivotX": 43, "pivotY": 10, "behind": true },
-            { "name": "legR", "src": "media/my_avatar_foot_r.png", "x": 182, "y": 382, "pivotX": 43, "pivotY": 10, "behind": true }
+            {
+                "name": "armL",
+                "src": "media/my_avatar_arm_l.png",
+                "x": 0,
+                "y": 235,
+                "pivotX": 84,
+                "pivotY": 27
+            },
+            {
+                "name": "armR",
+                "src": "media/my_avatar_arm_r.png",
+                "x": 261,
+                "y": 235,
+                "pivotX": 15,
+                "pivotY": 27
+            },
+            {
+                "name": "legL",
+                "src": "media/my_avatar_foot_l.png",
+                "x": 92,
+                "y": 382,
+                "pivotX": 43,
+                "pivotY": 10,
+                "behind": true
+            },
+            {
+                "name": "legR",
+                "src": "media/my_avatar_foot_r.png",
+                "x": 182,
+                "y": 382,
+                "pivotX": 43,
+                "pivotY": 10,
+                "behind": true
+            }
         ],
         "personality": {
             "greetings": [
@@ -35,15 +65,30 @@
                 "spin": 3,
                 "sleep": 6,
                 "laptop": 8,
-                "game": 8
+                "game": 8,
+                "movie": 6
             },
             "durations": {
                 "sit": [8, 20],
                 "sleep": [25, 60],
                 "laptop": [15, 40],
-                "game": [15, 40]
+                "game": [15, 40],
+                "movie": [30, 90],
+                "angry": [5, 8],
+                "sad": [8, 14],
+                "attention": [8, 14]
             },
             "nightSleepBoost": 5,
+            "attentionAfter": 8,
+            "hotkeys": {
+                "sleep": "CommandOrControl+Alt+S",
+                "laptop": "CommandOrControl+Alt+W",
+                "game": "CommandOrControl+Alt+G",
+                "movie": "CommandOrControl+Alt+M",
+                "dance": "CommandOrControl+Alt+D",
+                "greet": "CommandOrControl+Alt+H",
+                "normal": "CommandOrControl+Alt+N"
+            },
             "bubble": {
                 "fill": "#FFF6E5",
                 "stroke": "#5B4636",

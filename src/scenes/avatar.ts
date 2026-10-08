@@ -51,6 +51,10 @@ export interface IAvatarPersonality {
     durations?: { [state: string]: [number, number] };
     // multiply the sleep weight at night (22:00-06:00)
     nightSleepBoost?: number;
+    // minutes without hover/click before it starts seeking attention (0 = never)
+    attentionAfter?: number;
+    // global keyboard shortcuts, e.g. { "sleep": "CommandOrControl+Alt+S" }
+    hotkeys?: { [action: string]: string };
     bubble?: IBubbleStyle;
 }
 
@@ -72,8 +76,8 @@ export interface IAvatarOptions {
 // ---------- poses ----------
 
 type Anchor = "ground" | "center" | "wall" | "ceiling" | "bed";
-type Eyes = "open" | "closed" | "happy" | "sleep";
-type Prop = "laptop" | "controller" | "bed";
+type Eyes = "open" | "closed" | "happy" | "sleep" | "angry" | "sad";
+type Prop = "laptop" | "controller" | "bed" | "popcorn";
 
 interface ILimbPose {
     raise?: number; // radians, positive lifts the limb up/outwards
@@ -92,6 +96,10 @@ interface IPose {
     prop?: Prop;
     // 0..1 animation phase handed to the prop (screen flicker, breathing blanket...)
     propPhase?: number;
+    // coloured light falling on the character (e.g. a movie screen), "r,g,b,a"
+    light?: string;
+    // flat colour wash over the whole character, "r,g,b,a" (e.g. red with anger)
+    tint?: string;
 }
 
 interface IAvatarStateDef {
@@ -209,6 +217,75 @@ export const AVATAR_STATE_DEFS: IAvatarStateDef[] = [
                 },
                 prop: win ? undefined : "controller",
                 propPhase: t,
+            };
+        },
+    },
+    {
+        state: "movie", frames: 24, frameRate: 8, anchor: "ground",
+        pose: (t, i) => {
+            const eating = i >= 4 && i <= 8; // hand to mouth, chew
+            const laughing = i >= 16 && i <= 21;
+            const shake = laughing ? 0.05 * sin(TAU * (i - 16) / 3) : 0;
+            // screen light: shifts colour as scenes change
+            const lights = ["120,170,255", "255,255,255", "190,130,255", "120,220,255", "255,200,140", "255,255,255"];
+            return {
+                sy: 0.87 + (eating ? 0.015 * sin(TAU * i / 2) : 0), sx: 1.06,
+                rot: shake,
+                eyes: laughing ? "happy" : blink(i, [12]),
+                limbs: {
+                    armL: { raise: 0.35 },
+                    armR: { raise: eating ? 1.25 : 0.3 },
+                },
+                prop: "popcorn",
+                propPhase: t,
+                light: `${lights[Math.floor(i / 4) % lights.length]},${0.1 + 0.05 * sin(TAU * t * 5)}`,
+            };
+        },
+    },
+    {
+        state: "angry", frames: 16, frameRate: 12, anchor: "ground",
+        pose: (t, i) => {
+            const stomp = i % 4 < 2;
+            return {
+                dx: (i % 2 === 0 ? 1 : -1) * 0.012, // trembling with rage
+                sx: 1.07, sy: stomp ? 0.95 : 1.0,
+                eyes: "angry",
+                tint: "255,50,40,0.2",
+                limbs: {
+                    armL: { raise: 0.85 + 0.2 * sin(TAU * t * 4) },
+                    armR: { raise: 0.85 - 0.2 * sin(TAU * t * 4) },
+                    legL: { dy: stomp && i % 8 < 4 ? -0.05 : 0 },
+                    legR: { dy: stomp && i % 8 >= 4 ? -0.05 : 0 },
+                },
+            };
+        },
+    },
+    {
+        state: "sad", frames: 24, frameRate: 6, anchor: "ground",
+        pose: (t, i) => ({
+            sy: i === 10 || i === 11 ? 0.9 : 0.93, // sniff
+            sx: 1.03,
+            rot: 0.035 * sin(TAU * t),
+            dy: 0,
+            eyes: "sad",
+            limbs: { armL: { raise: -0.3 }, armR: { raise: i >= 14 && i <= 18 ? 1.1 : -0.3 } }, // wipes a tear
+        }),
+    },
+    {
+        state: "attention", frames: 16, frameRate: 12, anchor: "ground",
+        pose: (t, i) => {
+            const hop = Math.abs(sin(2 * TAU * t));
+            return {
+                dy: -0.12 * hop,
+                sy: 0.95 + 0.08 * hop, sx: 1.04 - 0.05 * hop,
+                rot: 0.06 * sin(TAU * t),
+                eyes: i % 8 < 4 ? "happy" : "open",
+                limbs: {
+                    armL: { raise: 1.5 + 0.45 * sin(2 * TAU * t) },
+                    armR: { raise: 1.5 - 0.45 * sin(2 * TAU * t) },
+                    legL: { dy: -0.03 * hop },
+                    legR: { dy: -0.03 * hop },
+                },
             };
         },
     },
@@ -465,19 +542,68 @@ function sampleAround(c: HTMLCanvasElement, eye: IAvatarEye): string {
 
 // copy of the body with the eyes drawn closed / happy / sleeping
 function eyeVariant(base: HTMLCanvasElement, opts: IAvatarOptions, kind: Eyes): HTMLCanvasElement {
-    if (kind === "open" || !opts.eyes?.length) return base;
+    if (kind === "open") return base;
+    if (!opts.eyes?.length && kind !== "angry") return base;
     const c = copyOf(base);
     const ctx = context(c);
-    for (const e of opts.eyes) {
+    const line = opts.eyeLineColor ?? "#3c2846";
+
+    if (kind === "angry") {
+        // eyes stay open, with furrowed brows slanting down towards the middle
+        const eyes = opts.eyes ?? [];
+        const mid = eyes.reduce((sum, e) => sum + e.x, 0) / Math.max(1, eyes.length);
+        ctx.strokeStyle = line;
+        ctx.lineCap = "round";
+        for (const e of eyes) {
+            const inner = e.x < mid ? 1 : -1;
+            ctx.lineWidth = Math.max(2, Math.min(e.rx, e.ry) * 0.45);
+            ctx.beginPath();
+            ctx.moveTo(e.x - inner * e.rx * 1.1, e.y - e.ry * 1.55);
+            ctx.lineTo(e.x + inner * e.rx * 1.0, e.y - e.ry * 1.0);
+            ctx.stroke();
+        }
+        return c;
+    }
+
+    for (const e of opts.eyes!) {
         ctx.fillStyle = opts.eyelidColor ?? sampleAround(base, e);
         ctx.beginPath();
         ctx.ellipse(e.x, e.y, e.rx * 1.18, e.ry * 1.15, 0, 0, TAU);
         ctx.fill();
 
-        ctx.strokeStyle = opts.eyeLineColor ?? "#3c2846";
+        ctx.strokeStyle = line;
         ctx.lineWidth = Math.max(2, Math.min(e.rx, e.ry) * 0.38);
         ctx.lineCap = "round";
         ctx.beginPath();
+        if (kind === "sad") {
+            // squeezed-shut eyes, worried brows (raised in the middle), a big tear
+            const eyes = opts.eyes!;
+            const mid = eyes.reduce((sum, o) => sum + o.x, 0) / eyes.length;
+            const inner = e.x < mid ? 1 : -1;
+            ctx.moveTo(e.x - e.rx, e.y);
+            ctx.quadraticCurveTo(e.x, e.y + e.ry * 0.55, e.x + e.rx, e.y);
+            ctx.moveTo(e.x - inner * e.rx * 1.1, e.y - e.ry * 1.0);
+            ctx.lineTo(e.x + inner * e.rx * 0.9, e.y - e.ry * 1.5);
+            ctx.stroke();
+
+            const tx = e.x + inner * -e.rx * 0.55; // tear on the outer side
+            const ty = e.y + e.ry * 0.55;
+            const r = Math.max(e.rx, e.ry) * 0.42;
+            ctx.fillStyle = "rgba(95,170,255,0.95)";
+            ctx.strokeStyle = "rgba(40,110,210,0.9)";
+            ctx.lineWidth = Math.max(1, r * 0.18);
+            ctx.beginPath();
+            ctx.moveTo(tx, ty);
+            ctx.quadraticCurveTo(tx + r * 0.9, ty + r * 1.4, tx, ty + r * 1.9);
+            ctx.quadraticCurveTo(tx - r * 0.9, ty + r * 1.4, tx, ty);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = "rgba(255,255,255,0.8)";
+            ctx.beginPath();
+            ctx.arc(tx - r * 0.2, ty + r * 1.3, r * 0.18, 0, TAU);
+            ctx.fill();
+            continue;
+        }
         if (kind === "happy") {
             // ^ ^
             ctx.moveTo(e.x - e.rx, e.y + e.ry * 0.25);
@@ -578,6 +704,47 @@ function drawController(ctx: CanvasRenderingContext2D, cx: number, ground: numbe
         ctx.fill();
     });
     ctx.globalAlpha = 1;
+}
+
+function drawPopcorn(ctx: CanvasRenderingContext2D, cx: number, ground: number, h: number, w: number, phase: number) {
+    const bw = Math.min(w * 0.42, h * 0.36);
+    const bh = h * 0.24;
+    const top = ground - h * 0.36;
+    const x = cx + w * 0.08; // held a little to one side
+    // popcorn heaped on top (gently shifts as it's eaten)
+    const puffs = [[-0.32, 0.02], [-0.12, -0.08], [0.1, -0.05], [0.3, 0.01], [0.0, 0.04], [-0.22, -0.02], [0.22, -0.1]];
+    puffs.forEach(([px, py], k) => {
+        ctx.fillStyle = k % 3 === 0 ? "#fff1c1" : "#fffaf0";
+        ctx.strokeStyle = "#e7c56d";
+        ctx.lineWidth = Math.max(1, h * 0.006);
+        ctx.beginPath();
+        ctx.arc(x + px * bw, top + py * bh + 0.01 * h * sin(TAU * phase + k), bw * 0.13, 0, TAU);
+        ctx.fill();
+        ctx.stroke();
+    });
+    // striped bucket (slightly wider at the top)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x - bw / 2, top);
+    ctx.lineTo(x + bw / 2, top);
+    ctx.lineTo(x + bw * 0.38, top + bh);
+    ctx.lineTo(x - bw * 0.38, top + bh);
+    ctx.closePath();
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.clip();
+    ctx.fillStyle = "#e8433f";
+    for (let k = -3; k <= 3; k += 2) ctx.fillRect(x + (k * bw) / 7 - bw / 14, top, bw / 7, bh);
+    ctx.restore();
+    ctx.strokeStyle = "#b92f2c";
+    ctx.lineWidth = Math.max(1, h * 0.01);
+    ctx.beginPath();
+    ctx.moveTo(x - bw / 2, top);
+    ctx.lineTo(x + bw / 2, top);
+    ctx.lineTo(x + bw * 0.38, top + bh);
+    ctx.lineTo(x - bw * 0.38, top + bh);
+    ctx.closePath();
+    ctx.stroke();
 }
 
 interface IBedLayout { x0: number; x1: number; mattressTop: number; pivotX: number; pivotY: number }
@@ -706,7 +873,7 @@ export function buildAvatarSheet(
 
     // 3. body in every eye state, cropped and scaled the same way
     const body: { [e in Eyes]: HTMLCanvasElement } = {} as any;
-    for (const kind of ["open", "closed", "happy", "sleep"] as Eyes[]) {
+    for (const kind of ["open", "closed", "happy", "sleep", "angry", "sad"] as Eyes[]) {
         let variant = base;
         try {
             variant = eyeVariant(base, options, kind);
@@ -815,6 +982,25 @@ export function buildAvatarSheet(
             // props in front of the character
             if (p.prop === "laptop") drawLaptop(ctx, cx, ground, h, w, p.propPhase ?? 0);
             if (p.prop === "controller") drawController(ctx, cx, ground, h, w, p.propPhase ?? 0);
+            if (p.prop === "popcorn") drawPopcorn(ctx, cx, ground, h, w, p.propPhase ?? 0);
+
+            if (p.tint) {
+                ctx.globalCompositeOperation = "source-atop";
+                ctx.fillStyle = `rgba(${p.tint})`;
+                ctx.fillRect(fx, fy, frameSize, frameSize);
+                ctx.globalCompositeOperation = "source-over";
+            }
+
+            // light from a screen in front of the character
+            if (p.light) {
+                const g = ctx.createRadialGradient(cx, ground - h * 0.55, h * 0.05, cx, ground - h * 0.5, h * 0.75);
+                g.addColorStop(0, `rgba(${p.light})`);
+                g.addColorStop(1, "rgba(0,0,0,0)");
+                ctx.globalCompositeOperation = "source-atop";
+                ctx.fillStyle = g;
+                ctx.fillRect(fx, fy, frameSize, frameSize);
+                ctx.globalCompositeOperation = "source-over";
+            }
 
             ctx.restore();
         }

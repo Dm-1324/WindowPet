@@ -16,6 +16,7 @@ import { info, error } from "tauri-plugin-log-api";
 import defaultSettings from "../../src-tauri/src/app/default/settings.json";
 import { ConfigManager, InputManager } from "./manager";
 import { avatarMeta, IAvatarPersonality } from "./avatar";
+import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortcut";
 
 interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     direction?: Direction;
@@ -31,6 +32,10 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     // timed activity (sleep / laptop / game / sit) and when it ends
     activity?: string;
     activityUntil?: number;
+    // activity turned on by a keyboard shortcut: lasts until turned off
+    mode?: boolean;
+    // activity to start as soon as the pet is back on the ground
+    pendingActivity?: { state: string; mode?: boolean; line?: string };
     nextParticleAt?: number;
     lastGreetAt?: number;
     downInfo?: { x: number; y: number; t: number };
@@ -68,6 +73,10 @@ export default class Pets extends Phaser.Scene {
         "sleep",
         "laptop",
         "game",
+        "movie",
+        "angry",
+        "sad",
+        "attention",
     ];
     private readonly FRAME_RATE: number = 9;
     private readonly UPDATE_DELAY: number = 1000 / this.FRAME_RATE;
@@ -86,10 +95,33 @@ export default class Pets extends Phaser.Scene {
     // defaults when an avatar's config doesn't say otherwise
     private readonly DEFAULT_PERSONALITY: Required<Omit<IAvatarPersonality, "bubble">> = {
         greetings: ["Good {time}!", "Hi there! 👋", "Oh, hello! 😊"],
-        weights: { walk: 30, stand: 12, idle: 10, sit: 8, dance: 5, spin: 3, sleep: 6, laptop: 8, game: 8 },
-        durations: { sit: [8, 20], sleep: [25, 60], laptop: [15, 40], game: [15, 40] },
+        weights: { walk: 30, stand: 12, idle: 10, sit: 8, dance: 5, spin: 3, sleep: 6, laptop: 8, game: 8, movie: 6 },
+        durations: {
+            sit: [8, 20], sleep: [25, 60], laptop: [15, 40], game: [15, 40], movie: [30, 90],
+            angry: [5, 8], sad: [8, 14], attention: [8, 14],
+        },
         nightSleepBoost: 5,
+        attentionAfter: 8,
+        hotkeys: {
+            sleep: "CommandOrControl+Alt+S",
+            laptop: "CommandOrControl+Alt+W",
+            game: "CommandOrControl+Alt+G",
+            movie: "CommandOrControl+Alt+M",
+            dance: "CommandOrControl+Alt+D",
+            greet: "CommandOrControl+Alt+H",
+            normal: "CommandOrControl+Alt+N",
+        },
     };
+    // states a keyboard shortcut can switch on as a lasting mode
+    private readonly MODES: { [state: string]: string } = {
+        sleep: "Sleep mode 😴",
+        laptop: "Work mode 💻",
+        game: "Gaming time! 🎮",
+        movie: "Movie night 🍿",
+    };
+    // last time the user hovered / clicked / dragged a pet
+    private lastInteraction: number = 0;
+    private registeredHotkeys: string[] = [];
     private readonly LINES: { [key: string]: string[] } = {
         sleepStart: ["*yawn* 😪", "Nap time…", "So sleepy… 💤"],
         sleepEnd: ["What a nap! ☀️", "*stretch* 🙆", "I'm refreshed!"],
@@ -102,13 +134,33 @@ export default class Pets extends Phaser.Scene {
         gameBusy: ["Shh, boss fight! 🎮", "One more level!", "Watch this! ✨"],
         spin: ["Wheee! ✨", "Spinny! 🌀"],
         dance: ["♪ Let's dance!", "Dance break! 💃"],
+        movieStart: ["Movie time! 🍿", "Ooh, this looks good 🎬", "Popcorn ready!"],
+        movieEnd: ["What a movie! 🎬", "That ending! 😭", "10/10 would watch again"],
+        movieBusy: ["Shh! Best part! 🤫", "Want some popcorn? 🍿", "No spoilers!"],
+        angryStart: ["Hmph! 😤", "Grr… 💢", "I'm SO mad!"],
+        angryEnd: ["…okay, I'm fine now.", "Phew. 😮‍💨", "Sorry, I got grumpy"],
+        angryBusy: ["Leave me alone! 😤", "Hmph!", "Not now! 💢"],
+        thrown: ["Hey! Don't throw me! 💢", "Ow! That hurt! 😠", "Rude!! 😤"],
+        sadStart: ["*sniff* 🥲", "I need a hug 🥺", "Nobody plays with me…"],
+        sadEnd: ["Feeling a bit better 🙂", "*sniff* okay…"],
+        comforted: ["Thank you 🥹", "You're the best! 💖", "Hugs! 🤗"],
+        attentionStart: ["Hey! Look at me! 👀", "Psst… 👉👈", "Play with me!", "Notice me! ✨", "Helloooo? 👋"],
+        noticed: ["Yay! You noticed! 💖", "Hehe, hi! 😊", "Finally! 🥳"],
+        modeOff: ["Back to normal! 🙂", "Okay, I'm free!", "What's next? ✨"],
+        sleepMode: ["Zzz… (sleep mode) 😴", "*snore* 💤"],
     };
     private readonly PARTICLES: { [state: string]: { texts: string[]; every: [number, number]; colors: string[] } } = {
         sleep: { texts: ["z", "Z", "Z"], every: [1000, 1300], colors: ["#7a6cc9"] },
         dance: { texts: ["♪", "♫", "♬"], every: [400, 650], colors: ["#ff6b9a", "#5aa9ff", "#ffb02e", "#7bd389"] },
         game: { texts: ["★", "+1", "✦", "🎮"], every: [1200, 2200], colors: ["#ffb02e", "#ff6b9a", "#5aa9ff"] },
         laptop: { texts: ["</>", "{ }", "💻", "☕", "✓"], every: [1600, 2600], colors: ["#3f8efc", "#2bb673", "#8a63d2"] },
+        movie: { texts: ["🍿", "😂", "😮", "🎬", "♥"], every: [1800, 3200], colors: ["#e8433f", "#ffb02e", "#ff6b9a"] },
+        angry: { texts: ["💢", "💨", "#@!", "💢"], every: [450, 750], colors: ["#e8433f", "#c62828"] },
+        sad: { texts: ["💧"], every: [900, 1400], colors: ["#5aa9ff"] },
+        attention: { texts: ["❗", "👀", "💖", "✨", "❓"], every: [450, 750], colors: ["#ff6b9a", "#ffb02e", "#5aa9ff"] },
     };
+    // particles that drop (tears) instead of floating up
+    private readonly FALLING_PARTICLES: string[] = ["sad"];
 
     constructor() {
         super({ key: "Pets" });
@@ -166,11 +218,16 @@ export default class Pets extends Phaser.Scene {
         // a click that wobbles a few pixels should still count as a click, not a drag
         this.input.dragDistanceThreshold = 4;
 
+        this.lastInteraction = this.time.now;
+        this.registerHotkeys();
+        this.events.once("destroy", () => this.unregisterHotkeys());
+
         // click on a pet -> it reacts (greet / dance / spin)
         this.input.on(
             "gameobjectdown",
             (pointer: Phaser.Input.Pointer, pet: Pet) => {
                 pet.downInfo = { x: pointer.x, y: pointer.y, t: this.time.now };
+                this.lastInteraction = this.time.now;
             }
         );
         this.input.on(
@@ -225,6 +282,12 @@ export default class Pets extends Phaser.Scene {
         );
 
         this.input.on("dragend", (pointer: any, pet: Pet) => {
+            this.lastInteraction = this.time.now;
+            // thrown hard? it'll be grumpy once it lands
+            const speed = Math.hypot(pointer.velocity.x, pointer.velocity.y);
+            if (pet.isAvatar && speed > 18 && !pet.mode) {
+                pet.pendingActivity = { state: "angry", line: this.pick(this.LINES.thrown) };
+            }
             // add tween effect when drag end for smooth throw effect
             this.tweens.add({
                 targets: pet,
@@ -1066,8 +1129,24 @@ export default class Pets extends Phaser.Scene {
         );
     }
 
-    personality(pet: Pet) {
-        return { ...this.DEFAULT_PERSONALITY, ...(pet.personality ?? {}) };
+    personality(pet?: Pet) {
+        const own = pet?.personality ?? {};
+        const d = this.DEFAULT_PERSONALITY;
+        return {
+            ...d,
+            ...own,
+            weights: { ...d.weights, ...(own.weights ?? {}) },
+            durations: { ...d.durations, ...(own.durations ?? {}) },
+            hotkeys: { ...d.hotkeys, ...(own.hotkeys ?? {}) },
+        };
+    }
+
+    // free to start something new (on the ground, not mid-air or being dragged)
+    canStartActivity(pet: Pet): boolean {
+        if (!pet.anims) return false;
+        const state = this.currentState(pet);
+        if (state === "fall") return !pet.anims.isPlaying; // landed
+        return this.isOnGround(pet);
     }
 
     pick<T>(items: T[]): T {
@@ -1104,8 +1183,13 @@ export default class Pets extends Phaser.Scene {
 
     reactToClick(pet: Pet): void {
         // busy pets answer instead of dropping what they're doing
+        this.lastInteraction = this.time.now;
         switch (pet.activity) {
             case "sleep":
+                if (pet.mode) {
+                    this.showBubble(pet, this.pick(this.LINES.sleepMode));
+                    return;
+                }
                 this.endActivity(pet);
                 this.showBubble(pet, this.pick(this.LINES.woken));
                 this.switchState(pet, "stand");
@@ -1116,6 +1200,23 @@ export default class Pets extends Phaser.Scene {
                 return;
             case "game":
                 this.showBubble(pet, this.pick(this.LINES.gameBusy));
+                return;
+            case "movie":
+                this.showBubble(pet, this.pick(this.LINES.movieBusy));
+                return;
+            case "angry":
+                this.showBubble(pet, this.pick(this.LINES.angryBusy));
+                return;
+            case "sad":
+                // comfort it
+                this.endActivity(pet);
+                this.showBubble(pet, this.pick(this.LINES.comforted));
+                this.switchState(pet, "stand");
+                this.time.delayedCall(900, () => this.playReaction(pet, "greet"));
+                pet.lastGreetAt = this.time.now;
+                return;
+            case "attention":
+                this.noticed(pet);
                 return;
             case "sit":
                 this.endActivity(pet);
@@ -1128,7 +1229,14 @@ export default class Pets extends Phaser.Scene {
     }
 
     onPetHover(pet: Pet, pointerX: number): void {
-        if (!pet || !pet.isAvatar || !pet.anims || pet.activity) return;
+        if (!pet || !pet.isAvatar || !pet.anims) return;
+        this.lastInteraction = this.time.now;
+        if (pet.activity === "attention") {
+            this.setPetLookToTheLeft(pet, pointerX < pet.x);
+            this.noticed(pet);
+            return;
+        }
+        if (pet.activity) return;
         const now = this.time.now;
         if (pet.lastGreetAt && now - pet.lastGreetAt < this.HOVER_GREET_COOLDOWN) return;
         if (!this.isOnGround(pet)) return;
@@ -1182,26 +1290,51 @@ export default class Pets extends Phaser.Scene {
         return true;
     }
 
-    startActivity(pet: Pet, state: string): void {
-        if (!pet.availableStates.includes(state) || !this.isOnGround(pet)) return;
+    startActivity(pet: Pet, state: string, mode: boolean = false, line?: string): boolean {
+        if (!pet.availableStates.includes(state)) return false;
+        if (!this.canStartActivity(pet)) {
+            // in the air / being dragged: do it after landing
+            pet.pendingActivity = { state, mode, line };
+            return false;
+        }
         const [min, max] = this.personality(pet).durations[state] ?? [10, 20];
 
+        pet.pendingActivity = undefined;
         this.switchState(pet, state);
         pet.activity = state;
-        pet.activityUntil = this.time.now + Phaser.Math.Between(min * 1000, max * 1000);
+        pet.mode = mode;
+        pet.activityUntil = mode ? Infinity : this.time.now + Phaser.Math.Between(min * 1000, max * 1000);
         pet.canPlayRandomState = false;
         pet.nextParticleAt = this.time.now + 800;
+        if (state === "attention") this.lastInteraction = this.time.now;
 
         const lines = this.LINES[`${state}Start`];
-        if (lines) this.showBubble(pet, this.pick(lines));
+        const text = line ?? (mode ? this.MODES[state] : lines ? this.pick(lines) : undefined);
+        if (text) this.showBubble(pet, text);
+        return true;
+    }
+
+    noticed(pet: Pet): void {
+        this.endActivity(pet);
+        this.showBubble(pet, this.pick(this.LINES.noticed));
+        pet.lastGreetAt = this.time.now;
+        this.switchState(pet, "stand");
+        this.time.delayedCall(700, () => this.playReaction(pet, "dance"));
     }
 
     endActivity(pet: Pet, finished: boolean = false): void {
         const was = pet.activity;
         pet.activity = undefined;
         pet.activityUntil = undefined;
+        pet.mode = false;
         pet.canPlayRandomState = true;
         if (!finished || !was) return;
+
+        // nobody noticed it asking for attention… now it's sad
+        if (was === "attention") {
+            this.startActivity(pet, "sad");
+            return;
+        }
 
         const lines = this.LINES[`${was}End`];
         if (lines) this.showBubble(pet, this.pick(lines));
@@ -1218,12 +1351,26 @@ export default class Pets extends Phaser.Scene {
             const state = this.currentState(pet);
 
             if (pet.activity) {
-                // interrupted (dragged, fell...)? forget the activity
                 if (state !== pet.activity) {
-                    this.endActivity(pet);
+                    if (pet.mode) {
+                        // modes survive being dragged around: resume after landing
+                        if (this.canStartActivity(pet)) this.switchState(pet, pet.activity);
+                    } else {
+                        // interrupted (dragged, fell...)? forget the activity
+                        this.endActivity(pet);
+                    }
                 } else if (time >= (pet.activityUntil ?? 0)) {
                     this.endActivity(pet, true);
                     continue;
+                }
+            } else if (pet.pendingActivity && this.canStartActivity(pet)) {
+                const next = pet.pendingActivity;
+                this.startActivity(pet, next.state, next.mode, next.line);
+            } else {
+                // ignored for a while? start asking for attention
+                const after = this.personality(pet).attentionAfter;
+                if (after > 0 && time - this.lastInteraction > after * 60000 && this.canStartActivity(pet)) {
+                    this.startActivity(pet, "attention");
                 }
             }
 
@@ -1358,9 +1505,11 @@ export default class Pets extends Phaser.Scene {
             .setDepth(9)
             .setAlpha(0);
 
+        const falling = this.FALLING_PARTICLES.includes(state);
+        if (falling) p.setPosition(head.x + Phaser.Math.Between(-14, 14), head.y + 30);
         this.tweens.add({
             targets: p,
-            y: p.y - Phaser.Math.Between(38, 55),
+            y: p.y + (falling ? Phaser.Math.Between(25, 35) : -Phaser.Math.Between(38, 55)),
             x: p.x + (state === "sleep" ? 18 * dir : Phaser.Math.Between(-18, 18)),
             angle: Phaser.Math.Between(-15, 15),
             duration: 1800,
@@ -1368,6 +1517,67 @@ export default class Pets extends Phaser.Scene {
             onComplete: () => p.destroy(),
         });
         this.tweens.add({ targets: p, alpha: 1, duration: 250, yoyo: true, hold: 1100 });
+    }
+
+    // ---------- keyboard shortcuts ----------
+
+    async registerHotkeys(): Promise<void> {
+        const avatar = this.configManager.getSpriteConfig().find((s) => s.avatar);
+        if (!avatar) return;
+        const hotkeys = this.personality({ personality: avatar.avatar?.personality } as Pet).hotkeys;
+
+        for (const [action, accelerator] of Object.entries(hotkeys)) {
+            if (!accelerator) continue;
+            try {
+                if (await isRegistered(accelerator)) await unregister(accelerator);
+                await register(accelerator, () => this.onHotkey(action));
+                this.registeredHotkeys.push(accelerator);
+            } catch (err: any) {
+                error(`Could not register shortcut ${accelerator} for ${action}: ${err}`);
+            }
+        }
+        info(`Avatar shortcuts: ${Object.entries(hotkeys).map(([a, k]) => `${k} = ${a}`).join(", ")}`);
+    }
+
+    unregisterHotkeys(): void {
+        for (const accelerator of this.registeredHotkeys) {
+            unregister(accelerator).catch(() => {});
+        }
+        this.registeredHotkeys = [];
+    }
+
+    onHotkey(action: string): void {
+        this.lastInteraction = this.time.now;
+        for (const pet of this.pets) {
+            if (!pet || !pet.isAvatar || !pet.anims) continue;
+
+            if (action === "normal") {
+                pet.pendingActivity = undefined;
+                if (pet.activity) {
+                    this.endActivity(pet);
+                    this.showBubble(pet, this.pick(this.LINES.modeOff));
+                    this.switchState(pet, "stand");
+                }
+                continue;
+            }
+
+            if (this.MODES[action]) {
+                // same shortcut again turns the mode off
+                if (pet.mode && pet.activity === action) {
+                    this.endActivity(pet);
+                    this.showBubble(pet, this.pick(this.LINES.modeOff));
+                    this.switchState(pet, "stand");
+                    continue;
+                }
+                if (pet.activity) this.endActivity(pet);
+                this.startActivity(pet, action, true);
+                continue;
+            }
+
+            // one-off actions (greet, dance, spin...)
+            if (pet.activity) this.endActivity(pet);
+            this.playReaction(pet, action, true);
+        }
     }
 
     // bubbles that go with a state change
