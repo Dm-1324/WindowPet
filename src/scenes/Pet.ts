@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { IPet } from "../types/IPet";
 import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
+import { avatarSourceKey, createAvatarTexture } from "./avatar";
 
 export class Pet extends Phaser.Scene {
     private pet: IPet | null = null;
@@ -19,6 +20,12 @@ export class Pet extends Phaser.Scene {
         this.sprite = this.game.registry.get('spriteConfig');
         this.playState = this.game.registry.get('playState');
 
+        const url = this.sprite!.type === SpriteType.CUSTOM ? convertFileSrc(this.sprite!.imageSrc) : this.sprite!.imageSrc;
+        if (this.sprite!.avatar) {
+            this.load.image(avatarSourceKey(this.sprite!.name), url);
+            return;
+        }
+
         this.load.spritesheet({
             key: this.sprite!.name,
             url: this.sprite!.type === SpriteType.CUSTOM ? convertFileSrc(this.sprite!.imageSrc) : this.sprite!.imageSrc,
@@ -27,12 +34,20 @@ export class Pet extends Phaser.Scene {
     }
 
     create(): void {
-        // register state animations
-        for (const animationConfig of this.getAnimationConfigPerSprite(this.sprite!)) {
-            this.anims.create(animationConfig);
+        let fitScale = 1;
+        if (this.sprite!.avatar) {
+            // generated sheet + animations; shrink the preview to fit the card
+            const frameSize = createAvatarTexture(this.textures, this.anims, this.sprite!.name, this.sprite!.avatar) ?? 1;
+            fitScale = Math.min(1, (Math.min(this.scale.width, this.scale.height) * 0.95) / frameSize);
+        } else {
+            // register state animations
+            for (const animationConfig of this.getAnimationConfigPerSprite(this.sprite!)) {
+                this.anims.create(animationConfig);
+            }
         }
 
         this.pet = this.physics.add.sprite(this.physics.world.bounds.width / 2, this.physics.world.bounds.height / 2, this.sprite!.name) as IPet;
+        this.pet.setScale(fitScale);
 
         this.pet.anims.play({
             key: `${this.playState}-${this.sprite!.name}`,

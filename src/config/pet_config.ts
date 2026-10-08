@@ -1,4 +1,6 @@
 import { ISpriteConfig } from "../types/ISpriteConfig"
+import { AVATAR_STATES } from "../scenes/avatar"
+import myAvatar from "./my_avatar.json"
 import spiderMan from "./spider_man.json"
 import ayaka from "./ayaka.json"
 import ganyu from "./ganyu.json"
@@ -51,6 +53,8 @@ import growlithe from "./Growlithe.json"
 import kuro from "./kuro.json"
 
 const defaultPetConfig: ISpriteConfig[] = [
+    // your own single-image avatar (states and sheet are generated from one picture)
+    { ...myAvatar, states: AVATAR_STATES } as ISpriteConfig,
     yoimiyaYs,
     zhongliYs,
     lumineXll,

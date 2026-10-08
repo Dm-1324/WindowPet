@@ -15,6 +15,7 @@ import {
 import { info, error } from "tauri-plugin-log-api";
 import defaultSettings from "../../src-tauri/src/app/default/settings.json";
 import { ConfigManager, InputManager } from "./manager";
+import { avatarMeta } from "./avatar";
 
 interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     direction?: Direction;
@@ -22,6 +23,14 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     canPlayRandomState: boolean;
     canRandomFlip: boolean;
     id: string;
+    // single-image avatar extras
+    isAvatar?: boolean;
+    baseScale?: number;
+    emote?: Phaser.GameObjects.Text | null;
+    lastGreetAt?: number;
+    downInfo?: { x: number; y: number; t: number };
+    fallHandler?: (anim: Phaser.Animations.Animation) => void;
+    reactionHandler?: (anim: Phaser.Animations.Animation) => void;
 }
 
 export default class Pets extends Phaser.Scene {
@@ -58,6 +67,19 @@ export default class Pets extends Phaser.Scene {
     private readonly TWEEN_ACCELERATION: number = this.FRAME_RATE * 1.1;
     private readonly RAND_STATE_DELAY: number = 3000;
     private readonly FLIP_DELAY: number = 5000;
+
+    // interactions
+    private readonly HOVER_GREET_COOLDOWN: number = 20000;
+    private readonly CLICK_REACTIONS: string[] = ["greet", "greet", "dance", "spin"];
+    private readonly NOT_ON_GROUND_STATES: string[] = ["climb", "crawl", "drag", "jump", "fall"];
+    private readonly EMOTES: { [state: string]: string[] } = {
+        greet: ["👋 Hi!", "👋 Hello!", "👋 Hey there!", "😊 Hi!"],
+        dance: ["♪ ♫", "♫ ♪ ♬", "🎶"],
+        spin: ["✨", "Wheee!"],
+        sleep: ["💤", "Zz"],
+    };
+    // how long a one-off emote stays (looping states like sleep keep theirs)
+    private readonly EMOTE_DURATION: number = 2200;
 
     constructor() {
         super({ key: "Pets" });
@@ -111,6 +133,33 @@ export default class Pets extends Phaser.Scene {
             this.addPet(sprite, i);
             i++;
         }
+
+        // a click that wobbles a few pixels should still count as a click, not a drag
+        this.input.dragDistanceThreshold = 4;
+
+        // click on a pet -> it reacts (greet / dance / spin)
+        this.input.on(
+            "gameobjectdown",
+            (pointer: Phaser.Input.Pointer, pet: Pet) => {
+                pet.downInfo = { x: pointer.x, y: pointer.y, t: this.time.now };
+            }
+        );
+        this.input.on(
+            "gameobjectup",
+            (pointer: Phaser.Input.Pointer, pet: Pet) => {
+                const down = pet.downInfo;
+                pet.downInfo = undefined;
+                if (!down) return;
+                const moved = Math.hypot(pointer.x - down.x, pointer.y - down.y);
+                if (moved > 6 || this.time.now - down.t > 500) return;
+                this.reactToClick(pet);
+            }
+        );
+
+        // mouse comes near a pet -> it turns to you and greets (with a cooldown)
+        this.inputManager.setOnPetHover((obj: Phaser.GameObjects.GameObject, x: number) =>
+            this.onPetHover(obj as Pet, x)
+        );
 
         // register event
         this.input.on(
@@ -310,6 +359,7 @@ export default class Pets extends Phaser.Scene {
 
     update(time: number, delta: number): void {
         this.frameCount += delta;
+        this.positionEmotes();
 
         if (this.frameCount >= this.UPDATE_DELAY) {
             this.frameCount = 0;
@@ -324,6 +374,12 @@ export default class Pets extends Phaser.Scene {
     addPet(sprite: ISpriteConfig, index: number): void {
         this.configManager.registerSpriteStateAnimation(sprite);
 
+        // avatar sheet is generated after its image loads; add the pet once it exists
+        if (sprite.avatar && !this.textures.exists(sprite.name)) {
+            this.load.once("complete", () => this.addPet(sprite, index));
+            return;
+        }
+
         const randomX = Phaser.Math.Between(
             100,
             this.physics.world.bounds.width - 100
@@ -336,6 +392,12 @@ export default class Pets extends Phaser.Scene {
                 draggable: true,
                 pixelPerfect: true,
             }) as Pet;
+
+        // avatar frames are generated at their final size, so the default scale shows them 1:1 (sharp)
+        this.pets[index].isAvatar = !!sprite.avatar;
+        this.pets[index].baseScale = sprite.avatar
+            ? 1 / defaultSettings.petScale
+            : 1;
 
         this.allowOverridePetScale
             ? this.scalePet(this.pets[index], this.petScale)
@@ -355,6 +417,7 @@ export default class Pets extends Phaser.Scene {
     removePet(petId: string): void {
         this.pets = this.pets.filter((pet: Pet, index: number) => {
             if (pet.id === petId) {
+                this.clearEmote(pet);
                 pet.destroy();
 
                 // get pet that use the same texture as the pet that is destroyed
@@ -513,6 +576,7 @@ export default class Pets extends Phaser.Scene {
             }
 
             this.updateStateDirection(pet, state);
+            this.showEmoteForState(pet, state);
         } catch (err: any) {
             // error could happen when trying to get name
             error(err);
@@ -534,6 +598,7 @@ export default class Pets extends Phaser.Scene {
     }
 
     scalePet(pet: Pet, scaleValue: number): void {
+        scaleValue = scaleValue * (pet.baseScale ?? 1);
         const scaleX = pet.scaleX > 0 ? scaleValue : -scaleValue;
         const scaleY = pet.scaleY > 0 ? scaleValue : -scaleValue;
         pet.setScale(scaleX, scaleY);
@@ -629,10 +694,15 @@ export default class Pets extends Phaser.Scene {
 
             // after fall animation complete, we play random state
             pet.canPlayRandomState = false;
-            pet.on("animationcomplete", () => {
+            const fallKey = this.configManager.getStateName("fall", pet);
+            if (pet.fallHandler) pet.off("animationcomplete", pet.fallHandler);
+            pet.fallHandler = (anim: Phaser.Animations.Animation) => {
+                if (anim.key !== fallKey) return;
+                pet.off("animationcomplete", pet.fallHandler);
                 pet.canPlayRandomState = true;
                 this.playRandomState(pet);
-            });
+            };
+            pet.on("animationcomplete", pet.fallHandler);
 
             return;
         }
@@ -940,6 +1010,125 @@ export default class Pets extends Phaser.Scene {
                 // if pet is not on the ground and they are not bounding left or right, we make the pet jump or spawn on the ground
                 this.petJumpOrPlayRandomState(pet);
             }
+        }
+    }
+
+    // ---------- interactions ----------
+
+    isOnGround(pet: Pet, allowDrag: boolean = false): boolean {
+        if (!pet.anims) return false;
+        const current = pet.anims.getName();
+        return !this.NOT_ON_GROUND_STATES.some(
+            (state) =>
+                !(allowDrag && state === "drag") &&
+                current === this.configManager.getStateName(state, pet)
+        );
+    }
+
+    // play a state a couple of times, then go back to walking or standing
+    playReaction(pet: Pet, state: string, allowDrag: boolean = false): boolean {
+        if (!pet.anims || !pet.availableStates.includes(state)) return false;
+        if (!this.isOnGround(pet, allowDrag)) return false;
+
+        const key = this.configManager.getStateName(state, pet);
+        if (pet.anims.getName() === key) return false;
+
+        pet.canPlayRandomState = false;
+        this.switchState(pet, state, { repeat: state === "dance" ? 2 : 1 });
+
+        if (pet.reactionHandler) pet.off("animationcomplete", pet.reactionHandler);
+        pet.reactionHandler = (anim: Phaser.Animations.Animation) => {
+            if (anim.key !== key) return;
+            pet.off("animationcomplete", pet.reactionHandler);
+            pet.canPlayRandomState = true;
+            const next = ["walk", "stand"][Phaser.Math.Between(0, 1)];
+            this.switchState(pet, pet.availableStates.includes(next) ? next : this.getOneRandomState(pet));
+        };
+        pet.on("animationcomplete", pet.reactionHandler);
+
+        // safety net in case the reaction is interrupted (e.g. the pet gets dragged)
+        setTimeout(() => {
+            if (pet.anims) pet.canPlayRandomState = true;
+        }, 8000);
+        return true;
+    }
+
+    reactToClick(pet: Pet): void {
+        const options = this.CLICK_REACTIONS.filter((s) => pet.availableStates.includes(s));
+        if (options.length === 0) return;
+        const state = options[Phaser.Math.Between(0, options.length - 1)];
+        if (this.playReaction(pet, state, true)) pet.lastGreetAt = this.time.now;
+    }
+
+    onPetHover(pet: Pet, pointerX: number): void {
+        if (!pet || !pet.isAvatar || !pet.anims) return;
+        const now = this.time.now;
+        if (pet.lastGreetAt && now - pet.lastGreetAt < this.HOVER_GREET_COOLDOWN) return;
+        if (!this.isOnGround(pet)) return;
+
+        // turn towards the cursor before saying hi
+        this.setPetLookToTheLeft(pet, pointerX < pet.x);
+        if (this.playReaction(pet, "greet")) pet.lastGreetAt = now;
+    }
+
+    // ---------- emotes (little speech bubbles above avatar pets) ----------
+
+    clearEmote(pet: Pet): void {
+        if (pet.emote) {
+            pet.emote.destroy();
+            pet.emote = null;
+        }
+    }
+
+    showEmoteForState(pet: Pet, state: string): void {
+        if (!pet.isAvatar) return;
+        this.clearEmote(pet);
+
+        const choices = this.EMOTES[state];
+        if (!choices) return;
+        const label = choices[Phaser.Math.Between(0, choices.length - 1)];
+
+        const emote = this.add
+            .text(pet.x, pet.y, label, {
+                fontFamily: '"Segoe UI Emoji", "Segoe UI", "Apple Color Emoji", sans-serif',
+                fontSize: "15px",
+                color: "#2b2b2b",
+                backgroundColor: "#ffffffee",
+                padding: { x: 8, y: 4 },
+            })
+            .setOrigin(0.5, 1)
+            .setResolution(window.devicePixelRatio || 1)
+            .setDepth(10)
+            .setAlpha(0);
+        pet.emote = emote;
+        this.positionEmotes();
+
+        this.tweens.add({ targets: emote, alpha: 1, duration: 180 });
+
+        // looping states keep the bubble, one-off reactions fade it out
+        if (state !== "sleep") {
+            this.time.delayedCall(this.EMOTE_DURATION, () => {
+                if (pet.emote !== emote) return;
+                this.tweens.add({
+                    targets: emote,
+                    alpha: 0,
+                    duration: 250,
+                    onComplete: () => {
+                        if (pet.emote === emote) this.clearEmote(pet);
+                    },
+                });
+            });
+        }
+    }
+
+    positionEmotes(): void {
+        for (const pet of this.pets) {
+            if (!pet || !pet.emote) continue;
+            const meta = avatarMeta.get(pet.texture.key);
+            const displayHeight = pet.height * Math.abs(pet.scaleY);
+            const headTop =
+                pet.y - displayHeight * pet.originY + displayHeight * (meta?.headTopRatio ?? 0);
+            pet.emote.setPosition(pet.x, Math.max(headTop - 4, pet.emote.height));
         }
     }
 }

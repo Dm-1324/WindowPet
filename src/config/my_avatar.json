@@ -1,0 +1,12 @@
+{
+    "name": "My Avatar",
+    "imageSrc": "media/my_avatar.png",
+    "frameSize": 1,
+    "avatar": {
+        "height": 120,
+        "removeBackground": "auto"
+    },
+    "credit": {
+        "socialMedia": "Made by me"
+    }
+}

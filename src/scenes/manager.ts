@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
 import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
 import { appWindow } from "@tauri-apps/api/window";
 import { error } from "tauri-plugin-log-api";
+import { avatarSourceKey, createAvatarTexture, AVATAR_STATES } from "./avatar";
 
 export class ConfigManager {
     // Config for sprite sheet that's going to be loaded
@@ -54,6 +55,11 @@ export class ConfigManager {
             return;
         }
         
+        if (sprite.avatar) {
+            this.registerAvatar(sprite);
+            return;
+        }
+
         // avoid showing broken sprite
         if (!this.validatePetSprite(sprite)) return;
 
@@ -84,6 +90,31 @@ export class ConfigManager {
             if (!this.anims.exists(animationConfig.key)) {
                 this.anims.create(animationConfig);
             }
+        }
+    }
+
+    // single-image avatar: build the generated sprite sheet once its source image is loaded
+    private registerAvatar(sprite: ISpriteConfig): void {
+        if (!this.textures || !this.anims || !this.load) return;
+
+        const frameSize = createAvatarTexture(
+            this.textures,
+            this.anims,
+            sprite.name,
+            sprite.avatar
+        );
+        if (frameSize !== null) {
+            sprite.frameSize = frameSize;
+            if (!sprite.states) sprite.states = AVATAR_STATES;
+            return;
+        }
+
+        // source image not loaded yet: load it, then try again
+        if (!this.textures.exists(avatarSourceKey(sprite.name))) {
+            this.registeredName.delete(sprite.name);
+            this.loadSpriteSheet(sprite);
+            this.load.once("complete", () => this.registerAvatar(sprite));
+            this.load.start();
         }
     }
 
@@ -119,6 +150,17 @@ export class ConfigManager {
         if (this.checkDuplicateName(sprite.name)) {
             return;
         }
+        const url =
+            sprite.type === SpriteType.CUSTOM
+                ? convertFileSrc(sprite.imageSrc)
+                : sprite.imageSrc;
+
+        // single-image avatar: load the plain picture, the sheet is generated later
+        if (sprite.avatar) {
+            this.load.image(avatarSourceKey(sprite.name), url);
+            return;
+        }
+
         // if pet sprite is not valid, we skip it to avoid error
         if (!this.validatePetSprite(sprite)) {
             return;
@@ -126,10 +168,7 @@ export class ConfigManager {
 
         this.load.spritesheet({
             key: sprite.name,
-            url:
-                sprite.type === SpriteType.CUSTOM
-                    ? convertFileSrc(sprite.imageSrc)
-                    : sprite.imageSrc,
+            url: url,
             frameConfig: this.getFrameSize(sprite),
         });
     }
@@ -265,6 +304,17 @@ export class ConfigManager {
 export class InputManager {
     private input: Phaser.Input.InputPlugin | undefined;
     private isIgnoreCursorEvents: boolean = false;
+    // objects the mouse was over at the last check, to detect "mouse entered a pet"
+    private hovered: Set<Phaser.GameObjects.GameObject> = new Set();
+    private onPetHover:
+        | ((obj: Phaser.GameObjects.GameObject, x: number) => void)
+        | null = null;
+
+    public setOnPetHover(
+        callback: (obj: Phaser.GameObjects.GameObject, x: number) => void
+    ): void {
+        this.onPetHover = callback;
+    }
 
     private readonly IGNORE_CURSOR_EVENTS_DELAY: number = 50;
 
@@ -275,7 +325,18 @@ export class InputManager {
     public checkIsMouseInOnPet(): void {
         try {
             invoke("get_mouse_position").then((event: any) => {
-                if (this.detectMouseOverPet(event.clientX, event.clientY)) {
+                const hits = this.detectMouseOverPet(event.clientX, event.clientY);
+
+                // notify about pets the mouse just moved onto
+                const now = new Set(hits);
+                for (const obj of now) {
+                    if (!this.hovered.has(obj) && this.onPetHover) {
+                        this.onPetHover(obj, this.input!.mousePointer.x);
+                    }
+                }
+                this.hovered = now;
+
+                if (hits.length > 0) {
                     this.turnOffIgnoreCursorEvents();
                     return;
                 }
@@ -320,10 +381,13 @@ export class InputManager {
         }
     }
 
-    private detectMouseOverPet(clientX: number, clientY: number): boolean {
+    private detectMouseOverPet(
+        clientX: number,
+        clientY: number
+    ): Phaser.GameObjects.GameObject[] {
         try {
             if (!this.input) {
-                return false;
+                return [];
             }
 
             // if not pixel perfect, we can detect mouse over pet using this (with loop through pets array)
@@ -335,12 +399,10 @@ export class InputManager {
 
             // this returns an array of all objects that the pointer is currently over,
             // if array length > 0, it means the pointer is over some sprite object
-            return (
-                this.input.hitTestPointer(this.input.activePointer).length > 0
-            );
+            return this.input.hitTestPointer(this.input.activePointer);
         } catch (error) {
             console.log("Error in InputManager detectMouseOverPet()", error);
-            return false;
+            return [];
         }
     }
 }

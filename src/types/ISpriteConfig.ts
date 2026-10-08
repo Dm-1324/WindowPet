@@ -1,3 +1,5 @@
+import { IAvatarOptions } from "../scenes/avatar";
+
 export interface ISpriteStateKey {
     [key: string]: {
         // if specify frameMax and spriteLine, the app will auto calculate the tile map
@@ -39,6 +41,8 @@ export interface ISpriteConfig {
     customId?: string,
     imageSrc: string,
     states: ISpriteStateKey,
+    // single-image avatar: the sprite sheet is generated from one picture at load time
+    avatar?: IAvatarOptions,
 }
 
 export interface IPetObject {
