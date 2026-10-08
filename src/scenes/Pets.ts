@@ -15,7 +15,7 @@ import {
 import { info, error } from "tauri-plugin-log-api";
 import defaultSettings from "../../src-tauri/src/app/default/settings.json";
 import { ConfigManager, InputManager } from "./manager";
-import { avatarMeta } from "./avatar";
+import { avatarMeta, IAvatarPersonality } from "./avatar";
 
 interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     direction?: Direction;
@@ -26,7 +26,12 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     // single-image avatar extras
     isAvatar?: boolean;
     baseScale?: number;
-    emote?: Phaser.GameObjects.Text | null;
+    personality?: IAvatarPersonality;
+    bubble?: Phaser.GameObjects.Container | null;
+    // timed activity (sleep / laptop / game / sit) and when it ends
+    activity?: string;
+    activityUntil?: number;
+    nextParticleAt?: number;
     lastGreetAt?: number;
     downInfo?: { x: number; y: number; t: number };
     fallHandler?: (anim: Phaser.Animations.Animation) => void;
@@ -59,6 +64,10 @@ export default class Pets extends Phaser.Scene {
         "drag",
         "bounce",
         "jump",
+        // long activities are only started by the avatar's own chooser
+        "sleep",
+        "laptop",
+        "game",
     ];
     private readonly FRAME_RATE: number = 9;
     private readonly UPDATE_DELAY: number = 1000 / this.FRAME_RATE;
@@ -72,14 +81,34 @@ export default class Pets extends Phaser.Scene {
     private readonly HOVER_GREET_COOLDOWN: number = 20000;
     private readonly CLICK_REACTIONS: string[] = ["greet", "greet", "dance", "spin"];
     private readonly NOT_ON_GROUND_STATES: string[] = ["climb", "crawl", "drag", "jump", "fall"];
-    private readonly EMOTES: { [state: string]: string[] } = {
-        greet: ["👋 Hi!", "👋 Hello!", "👋 Hey there!", "😊 Hi!"],
-        dance: ["♪ ♫", "♫ ♪ ♬", "🎶"],
-        spin: ["✨", "Wheee!"],
-        sleep: ["💤", "Zz"],
+    private readonly BUBBLE_DURATION: number = 2600;
+
+    // defaults when an avatar's config doesn't say otherwise
+    private readonly DEFAULT_PERSONALITY: Required<Omit<IAvatarPersonality, "bubble">> = {
+        greetings: ["Good {time}!", "Hi there! 👋", "Oh, hello! 😊"],
+        weights: { walk: 30, stand: 12, idle: 10, sit: 8, dance: 5, spin: 3, sleep: 6, laptop: 8, game: 8 },
+        durations: { sit: [8, 20], sleep: [25, 60], laptop: [15, 40], game: [15, 40] },
+        nightSleepBoost: 5,
     };
-    // how long a one-off emote stays (looping states like sleep keep theirs)
-    private readonly EMOTE_DURATION: number = 2200;
+    private readonly LINES: { [key: string]: string[] } = {
+        sleepStart: ["*yawn* 😪", "Nap time…", "So sleepy… 💤"],
+        sleepEnd: ["What a nap! ☀️", "*stretch* 🙆", "I'm refreshed!"],
+        woken: ["Huh?! 😳", "5 more minutes… 😴", "I'm up! I'm up!"],
+        laptopStart: ["Let me check something… 💻", "Work time ⌨️", "Coding a bit…"],
+        laptopEnd: ["Done! ✅", "Saved my work 💾", "Time for a break"],
+        laptopBusy: ["Busy working… 💻", "Almost done!", "One sec! ⌨️"],
+        gameStart: ["Game time! 🎮", "Just one round…", "Let's play!"],
+        gameEnd: ["GG! 🏆", "New high score! ⭐", "That was fun!"],
+        gameBusy: ["Shh, boss fight! 🎮", "One more level!", "Watch this! ✨"],
+        spin: ["Wheee! ✨", "Spinny! 🌀"],
+        dance: ["♪ Let's dance!", "Dance break! 💃"],
+    };
+    private readonly PARTICLES: { [state: string]: { texts: string[]; every: [number, number]; colors: string[] } } = {
+        sleep: { texts: ["z", "Z", "Z"], every: [1000, 1300], colors: ["#7a6cc9"] },
+        dance: { texts: ["♪", "♫", "♬"], every: [400, 650], colors: ["#ff6b9a", "#5aa9ff", "#ffb02e", "#7bd389"] },
+        game: { texts: ["★", "+1", "✦", "🎮"], every: [1200, 2200], colors: ["#ffb02e", "#ff6b9a", "#5aa9ff"] },
+        laptop: { texts: ["</>", "{ }", "💻", "☕", "✓"], every: [1600, 2600], colors: ["#3f8efc", "#2bb673", "#8a63d2"] },
+    };
 
     constructor() {
         super({ key: "Pets" });
@@ -359,7 +388,8 @@ export default class Pets extends Phaser.Scene {
 
     update(time: number, delta: number): void {
         this.frameCount += delta;
-        this.positionEmotes();
+        this.updateAvatars(time);
+        this.positionBubbles();
 
         if (this.frameCount >= this.UPDATE_DELAY) {
             this.frameCount = 0;
@@ -395,6 +425,7 @@ export default class Pets extends Phaser.Scene {
 
         // avatar frames are generated at their final size, so the default scale shows them 1:1 (sharp)
         this.pets[index].isAvatar = !!sprite.avatar;
+        this.pets[index].personality = sprite.avatar?.personality;
         this.pets[index].baseScale = sprite.avatar
             ? 1 / defaultSettings.petScale
             : 1;
@@ -417,7 +448,7 @@ export default class Pets extends Phaser.Scene {
     removePet(petId: string): void {
         this.pets = this.pets.filter((pet: Pet, index: number) => {
             if (pet.id === petId) {
-                this.clearEmote(pet);
+                this.clearBubble(pet);
                 pet.destroy();
 
                 // get pet that use the same texture as the pet that is destroyed
@@ -667,7 +698,10 @@ export default class Pets extends Phaser.Scene {
     }
 
     playRandomState(pet: Pet): void {
-        if (!pet.canPlayRandomState) return;
+        if (!pet.canPlayRandomState || pet.activity) return;
+
+        // avatars pick from their own weighted list, including long activities
+        if (pet.isAvatar && this.playAvatarRandomState(pet)) return;
 
         this.switchState(pet, this.getOneRandomState(pet));
         pet.canPlayRandomState = false;
@@ -787,6 +821,8 @@ export default class Pets extends Phaser.Scene {
         if (!pet) {
             return;
         }
+        // busy sleeping / working / gaming: don't wander off
+        if (pet.activity) return;
 
         switch (pet.anims.getName()) {
             case this.configManager.getStateName("climb", pet):
@@ -1015,14 +1051,27 @@ export default class Pets extends Phaser.Scene {
 
     // ---------- interactions ----------
 
+    // the plain state name ("walk") from the animation key ("walk-My Avatar")
+    currentState(pet: Pet): string {
+        const key = pet.anims?.getName() ?? "";
+        const suffix = `-${pet.texture.key}`;
+        return key.endsWith(suffix) ? key.slice(0, -suffix.length) : key;
+    }
+
     isOnGround(pet: Pet, allowDrag: boolean = false): boolean {
         if (!pet.anims) return false;
-        const current = pet.anims.getName();
+        const current = this.currentState(pet);
         return !this.NOT_ON_GROUND_STATES.some(
-            (state) =>
-                !(allowDrag && state === "drag") &&
-                current === this.configManager.getStateName(state, pet)
+            (state) => !(allowDrag && state === "drag") && current === state
         );
+    }
+
+    personality(pet: Pet) {
+        return { ...this.DEFAULT_PERSONALITY, ...(pet.personality ?? {}) };
+    }
+
+    pick<T>(items: T[]): T {
+        return items[Phaser.Math.Between(0, items.length - 1)];
     }
 
     // play a state a couple of times, then go back to walking or standing
@@ -1041,27 +1090,45 @@ export default class Pets extends Phaser.Scene {
             if (anim.key !== key) return;
             pet.off("animationcomplete", pet.reactionHandler);
             pet.canPlayRandomState = true;
-            const next = ["walk", "stand"][Phaser.Math.Between(0, 1)];
+            const next = this.pick(["walk", "stand"]);
             this.switchState(pet, pet.availableStates.includes(next) ? next : this.getOneRandomState(pet));
         };
         pet.on("animationcomplete", pet.reactionHandler);
 
         // safety net in case the reaction is interrupted (e.g. the pet gets dragged)
         setTimeout(() => {
-            if (pet.anims) pet.canPlayRandomState = true;
+            if (pet.anims && !pet.activity) pet.canPlayRandomState = true;
         }, 8000);
         return true;
     }
 
     reactToClick(pet: Pet): void {
+        // busy pets answer instead of dropping what they're doing
+        switch (pet.activity) {
+            case "sleep":
+                this.endActivity(pet);
+                this.showBubble(pet, this.pick(this.LINES.woken));
+                this.switchState(pet, "stand");
+                pet.lastGreetAt = this.time.now;
+                return;
+            case "laptop":
+                this.showBubble(pet, this.pick(this.LINES.laptopBusy));
+                return;
+            case "game":
+                this.showBubble(pet, this.pick(this.LINES.gameBusy));
+                return;
+            case "sit":
+                this.endActivity(pet);
+                break;
+        }
+
         const options = this.CLICK_REACTIONS.filter((s) => pet.availableStates.includes(s));
         if (options.length === 0) return;
-        const state = options[Phaser.Math.Between(0, options.length - 1)];
-        if (this.playReaction(pet, state, true)) pet.lastGreetAt = this.time.now;
+        if (this.playReaction(pet, this.pick(options), true)) pet.lastGreetAt = this.time.now;
     }
 
     onPetHover(pet: Pet, pointerX: number): void {
-        if (!pet || !pet.isAvatar || !pet.anims) return;
+        if (!pet || !pet.isAvatar || !pet.anims || pet.activity) return;
         const now = this.time.now;
         if (pet.lastGreetAt && now - pet.lastGreetAt < this.HOVER_GREET_COOLDOWN) return;
         if (!this.isOnGround(pet)) return;
@@ -1071,64 +1138,252 @@ export default class Pets extends Phaser.Scene {
         if (this.playReaction(pet, "greet")) pet.lastGreetAt = now;
     }
 
-    // ---------- emotes (little speech bubbles above avatar pets) ----------
+    // ---------- activities ----------
 
-    clearEmote(pet: Pet): void {
-        if (pet.emote) {
-            pet.emote.destroy();
-            pet.emote = null;
+    timeOfDay(): string {
+        const h = new Date().getHours();
+        if (h >= 5 && h < 12) return "morning";
+        if (h >= 12 && h < 17) return "afternoon";
+        if (h >= 17 && h < 22) return "evening";
+        return "night";
+    }
+
+    // weighted random pick for avatars; returns false to fall back to the default chooser
+    playAvatarRandomState(pet: Pet): boolean {
+        if (!this.isOnGround(pet)) return false;
+        const p = this.personality(pet);
+        const night = this.timeOfDay() === "night";
+
+        const options: [string, number][] = Object.entries(p.weights)
+            .filter(([state, weight]) => weight > 0 && pet.availableStates.includes(state))
+            .map(([state, weight]) => [state, state === "sleep" && night ? weight * p.nightSleepBoost : weight]);
+        if (options.length === 0) return false;
+
+        let roll = Math.random() * options.reduce((sum, [, w]) => sum + w, 0);
+        let choice = options[0][0];
+        for (const [state, weight] of options) {
+            roll -= weight;
+            if (roll <= 0) {
+                choice = state;
+                break;
+            }
+        }
+
+        if (p.durations[choice]) {
+            this.startActivity(pet, choice);
+            return true;
+        }
+
+        this.switchState(pet, choice);
+        pet.canPlayRandomState = false;
+        setTimeout(() => {
+            if (!pet.activity) pet.canPlayRandomState = true;
+        }, this.RAND_STATE_DELAY);
+        return true;
+    }
+
+    startActivity(pet: Pet, state: string): void {
+        if (!pet.availableStates.includes(state) || !this.isOnGround(pet)) return;
+        const [min, max] = this.personality(pet).durations[state] ?? [10, 20];
+
+        this.switchState(pet, state);
+        pet.activity = state;
+        pet.activityUntil = this.time.now + Phaser.Math.Between(min * 1000, max * 1000);
+        pet.canPlayRandomState = false;
+        pet.nextParticleAt = this.time.now + 800;
+
+        const lines = this.LINES[`${state}Start`];
+        if (lines) this.showBubble(pet, this.pick(lines));
+    }
+
+    endActivity(pet: Pet, finished: boolean = false): void {
+        const was = pet.activity;
+        pet.activity = undefined;
+        pet.activityUntil = undefined;
+        pet.canPlayRandomState = true;
+        if (!finished || !was) return;
+
+        const lines = this.LINES[`${was}End`];
+        if (lines) this.showBubble(pet, this.pick(lines));
+        this.switchState(pet, "stand");
+        // stretch for a moment, then carry on
+        setTimeout(() => {
+            if (pet.anims && !pet.activity && this.currentState(pet) === "stand") this.switchState(pet, "walk");
+        }, 1800);
+    }
+
+    updateAvatars(time: number): void {
+        for (const pet of this.pets) {
+            if (!pet || !pet.isAvatar || !pet.anims) continue;
+            const state = this.currentState(pet);
+
+            if (pet.activity) {
+                // interrupted (dragged, fell...)? forget the activity
+                if (state !== pet.activity) {
+                    this.endActivity(pet);
+                } else if (time >= (pet.activityUntil ?? 0)) {
+                    this.endActivity(pet, true);
+                    continue;
+                }
+            }
+
+            const fx = this.PARTICLES[state];
+            if (fx && time >= (pet.nextParticleAt ?? 0)) {
+                pet.nextParticleAt = time + Phaser.Math.Between(fx.every[0], fx.every[1]);
+                this.spawnParticle(pet, state, fx);
+            }
         }
     }
 
+    // ---------- speech bubbles & floating particles ----------
+
+    // point just above the head (or the head on the pillow when sleeping)
+    headPoint(pet: Pet): { x: number; y: number } {
+        const meta = avatarMeta.get(pet.texture.key);
+        const w = pet.width * Math.abs(pet.scaleX);
+        const h = pet.height * Math.abs(pet.scaleY);
+        const left = pet.x - w * pet.originX;
+        const top = pet.y - h * pet.originY;
+        if (meta && this.currentState(pet) === "sleep") {
+            // frames are mirrored when the pet faces left
+            const hx = pet.scaleX < 0 ? 1 - meta.sleepHead.x : meta.sleepHead.x;
+            return { x: left + hx * w, y: top + meta.sleepHead.y * h };
+        }
+        return { x: pet.x, y: top + h * (meta?.headTopRatio ?? 0) };
+    }
+
+    color(hex: string | undefined, fallback: string): number {
+        return Phaser.Display.Color.HexStringToColor(hex ?? fallback).color;
+    }
+
+    clearBubble(pet: Pet): void {
+        if (pet.bubble) {
+            pet.bubble.destroy();
+            pet.bubble = null;
+        }
+    }
+
+    showBubble(pet: Pet, text: string, duration: number = this.BUBBLE_DURATION): void {
+        this.clearBubble(pet);
+        const style = pet.personality?.bubble ?? {};
+        const fill = this.color(style.fill, "#FFF6E5");
+        const stroke = this.color(style.stroke, "#5B4636");
+
+        const label = this.add
+            .text(0, 0, text, {
+                fontFamily: style.font ?? '"Segoe UI Emoji", "Segoe UI", sans-serif',
+                fontSize: `${style.fontSize ?? 14}px`,
+                color: style.text ?? "#4A3B33",
+                fontStyle: "bold",
+            })
+            .setOrigin(0.5)
+            .setResolution(window.devicePixelRatio || 1);
+
+        const padX = 11, padY = 6, tail = 8, radius = 11;
+        const bw = Math.ceil(label.width + padX * 2);
+        const bh = Math.ceil(label.height + padY * 2);
+        const top = -bh - tail;
+
+        const g = this.add.graphics();
+        // soft shadow
+        g.fillStyle(0x000000, 0.14);
+        g.fillRoundedRect(-bw / 2 + 2, top + 3, bw, bh, radius);
+        // body + outline
+        g.fillStyle(fill, 1);
+        g.lineStyle(2, stroke, 1);
+        g.fillRoundedRect(-bw / 2, top, bw, bh, radius);
+        g.strokeRoundedRect(-bw / 2, top, bw, bh, radius);
+        // tail pointing at the head
+        g.fillTriangle(-7, -tail - 1.5, 7, -tail - 1.5, 0, 0);
+        g.lineBetween(-7, -tail, 0, 0);
+        g.lineBetween(7, -tail, 0, 0);
+        // little shine
+        g.fillStyle(0xffffff, 0.7);
+        g.fillCircle(-bw / 2 + 8, top + 7, 2.2);
+
+        label.setPosition(0, top + bh / 2);
+        const bubble = this.add.container(0, 0, [g, label]).setDepth(10).setScale(0.3).setAlpha(0);
+        bubble.setSize(bw, bh + tail);
+        pet.bubble = bubble;
+        this.positionBubbles();
+
+        // pop in, hang around, float away
+        this.tweens.add({ targets: bubble, scale: 1, alpha: 1, duration: 260, ease: Ease.BackEaseOut });
+        this.time.delayedCall(duration, () => {
+            if (pet.bubble !== bubble) return;
+            this.tweens.add({
+                targets: bubble,
+                alpha: 0,
+                scale: 0.85,
+                duration: 220,
+                onComplete: () => {
+                    if (pet.bubble === bubble) this.clearBubble(pet);
+                },
+            });
+        });
+    }
+
+    positionBubbles(): void {
+        const screenW = this.physics.world.bounds.width;
+        for (const pet of this.pets) {
+            if (!pet || !pet.bubble) continue;
+            const head = this.headPoint(pet);
+            const half = pet.bubble.width / 2;
+            // keep the bubble on screen
+            const x = Phaser.Math.Clamp(head.x, half + 4, screenW - half - 4);
+            pet.bubble.setPosition(x, Math.max(head.y - 2, pet.bubble.height + 4));
+        }
+    }
+
+    spawnParticle(pet: Pet, state: string, fx: { texts: string[]; colors: string[] }): void {
+        const head = this.headPoint(pet);
+        const text =
+            state === "sleep"
+                ? fx.texts[Math.floor(this.time.now / 1100) % fx.texts.length]
+                : this.pick(fx.texts);
+        const size = state === "sleep" ? 13 + (Math.floor(this.time.now / 1100) % 3) * 4 : 15;
+        const dir = pet.scaleX < 0 ? -1 : 1;
+
+        const p = this.add
+            .text(head.x + Phaser.Math.Between(-8, 8), head.y - 4, text, {
+                fontFamily: '"Segoe UI Emoji", "Segoe UI", sans-serif',
+                fontSize: `${size}px`,
+                fontStyle: "bold",
+                color: this.pick(fx.colors),
+                stroke: "#ffffff",
+                strokeThickness: 3,
+            })
+            .setOrigin(0.5)
+            .setResolution(window.devicePixelRatio || 1)
+            .setDepth(9)
+            .setAlpha(0);
+
+        this.tweens.add({
+            targets: p,
+            y: p.y - Phaser.Math.Between(38, 55),
+            x: p.x + (state === "sleep" ? 18 * dir : Phaser.Math.Between(-18, 18)),
+            angle: Phaser.Math.Between(-15, 15),
+            duration: 1800,
+            ease: "Sine.easeOut",
+            onComplete: () => p.destroy(),
+        });
+        this.tweens.add({ targets: p, alpha: 1, duration: 250, yoyo: true, hold: 1100 });
+    }
+
+    // bubbles that go with a state change
     showEmoteForState(pet: Pet, state: string): void {
         if (!pet.isAvatar) return;
-        this.clearEmote(pet);
-
-        const choices = this.EMOTES[state];
-        if (!choices) return;
-        const label = choices[Phaser.Math.Between(0, choices.length - 1)];
-
-        const emote = this.add
-            .text(pet.x, pet.y, label, {
-                fontFamily: '"Segoe UI Emoji", "Segoe UI", "Apple Color Emoji", sans-serif',
-                fontSize: "15px",
-                color: "#2b2b2b",
-                backgroundColor: "#ffffffee",
-                padding: { x: 8, y: 4 },
-            })
-            .setOrigin(0.5, 1)
-            .setResolution(window.devicePixelRatio || 1)
-            .setDepth(10)
-            .setAlpha(0);
-        pet.emote = emote;
-        this.positionEmotes();
-
-        this.tweens.add({ targets: emote, alpha: 1, duration: 180 });
-
-        // looping states keep the bubble, one-off reactions fade it out
-        if (state !== "sleep") {
-            this.time.delayedCall(this.EMOTE_DURATION, () => {
-                if (pet.emote !== emote) return;
-                this.tweens.add({
-                    targets: emote,
-                    alpha: 0,
-                    duration: 250,
-                    onComplete: () => {
-                        if (pet.emote === emote) this.clearEmote(pet);
-                    },
-                });
-            });
+        if (this.NOT_ON_GROUND_STATES.includes(state)) {
+            this.clearBubble(pet);
+            return;
         }
-    }
-
-    positionEmotes(): void {
-        for (const pet of this.pets) {
-            if (!pet || !pet.emote) continue;
-            const meta = avatarMeta.get(pet.texture.key);
-            const displayHeight = pet.height * Math.abs(pet.scaleY);
-            const headTop =
-                pet.y - displayHeight * pet.originY + displayHeight * (meta?.headTopRatio ?? 0);
-            pet.emote.setPosition(pet.x, Math.max(headTop - 4, pet.emote.height));
+        if (state === "greet") {
+            const line = this.pick(this.personality(pet).greetings);
+            this.showBubble(pet, line.replace("{time}", this.timeOfDay()));
+        } else if (state === "spin" && Math.random() < 0.6) {
+            this.showBubble(pet, this.pick(this.LINES.spin));
+        } else if (state === "dance" && Math.random() < 0.4) {
+            this.showBubble(pet, this.pick(this.LINES.dance));
         }
     }
 }

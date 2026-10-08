@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/tauri";
 import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
 import { appWindow } from "@tauri-apps/api/window";
 import { error } from "tauri-plugin-log-api";
-import { avatarSourceKey, createAvatarTexture, AVATAR_STATES } from "./avatar";
+import { avatarPartKey, avatarSourceKey, createAvatarTexture, AVATAR_STATES } from "./avatar";
 
 export class ConfigManager {
     // Config for sprite sheet that's going to be loaded
@@ -158,6 +158,13 @@ export class ConfigManager {
         // single-image avatar: load the plain picture, the sheet is generated later
         if (sprite.avatar) {
             this.load.image(avatarSourceKey(sprite.name), url);
+            // rig pieces (arms / feet), loaded the same way as the main picture
+            (sprite.avatar.parts ?? []).forEach((part, i) => {
+                this.load!.image(
+                    avatarPartKey(sprite.name, i),
+                    sprite.type === SpriteType.CUSTOM ? convertFileSrc(part.src) : part.src
+                );
+            });
             return;
         }
 

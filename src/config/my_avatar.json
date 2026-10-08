@@ -2,11 +2,55 @@
     "name": "My Avatar",
     "imageSrc": "media/my_avatar.png",
     "frameSize": 1,
-    "avatar": {
-        "height": 120,
-        "removeBackground": "auto"
-    },
     "credit": {
         "socialMedia": "Made by me"
+    },
+    "avatar": {
+        "height": 120,
+        "removeBackground": "auto",
+        "eyes": [
+            { "x": 135, "y": 180, "rx": 20, "ry": 30 },
+            { "x": 225, "y": 180, "rx": 20, "ry": 30 }
+        ],
+        "eyeLineColor": "#3c2846",
+        "parts": [
+            { "name": "armL", "src": "media/my_avatar_arm_l.png", "x": 0, "y": 235, "pivotX": 84, "pivotY": 27 },
+            { "name": "armR", "src": "media/my_avatar_arm_r.png", "x": 261, "y": 235, "pivotX": 15, "pivotY": 27 },
+            { "name": "legL", "src": "media/my_avatar_foot_l.png", "x": 92, "y": 382, "pivotX": 43, "pivotY": 10, "behind": true },
+            { "name": "legR", "src": "media/my_avatar_foot_r.png", "x": 182, "y": 382, "pivotX": 43, "pivotY": 10, "behind": true }
+        ],
+        "personality": {
+            "greetings": [
+                "Good {time}!",
+                "Hi there! 👋",
+                "Oh, hello! 😊",
+                "Hey! Missed you ✨"
+            ],
+            "weights": {
+                "walk": 30,
+                "stand": 12,
+                "idle": 10,
+                "sit": 8,
+                "dance": 5,
+                "spin": 3,
+                "sleep": 6,
+                "laptop": 8,
+                "game": 8
+            },
+            "durations": {
+                "sit": [8, 20],
+                "sleep": [25, 60],
+                "laptop": [15, 40],
+                "game": [15, 40]
+            },
+            "nightSleepBoost": 5,
+            "bubble": {
+                "fill": "#FFF6E5",
+                "stroke": "#5B4636",
+                "text": "#4A3B33",
+                "font": "\"Segoe UI Emoji\", \"Segoe UI\", sans-serif",
+                "fontSize": 14
+            }
+        }
     }
 }

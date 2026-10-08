@@ -54,7 +54,7 @@ import kuro from "./kuro.json"
 
 const defaultPetConfig: ISpriteConfig[] = [
     // your own single-image avatar (states and sheet are generated from one picture)
-    { ...myAvatar, states: AVATAR_STATES } as ISpriteConfig,
+    { ...myAvatar, states: AVATAR_STATES } as unknown as ISpriteConfig,
     yoimiyaYs,
     zhongliYs,
     lumineXll,

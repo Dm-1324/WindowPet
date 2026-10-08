@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/tauri";
 import { IPet } from "../types/IPet";
 import { ISpriteConfig, SpriteType } from "../types/ISpriteConfig";
-import { avatarSourceKey, createAvatarTexture } from "./avatar";
+import { avatarPartKey, avatarSourceKey, createAvatarTexture } from "./avatar";
 
 export class Pet extends Phaser.Scene {
     private pet: IPet | null = null;
@@ -23,6 +23,10 @@ export class Pet extends Phaser.Scene {
         const url = this.sprite!.type === SpriteType.CUSTOM ? convertFileSrc(this.sprite!.imageSrc) : this.sprite!.imageSrc;
         if (this.sprite!.avatar) {
             this.load.image(avatarSourceKey(this.sprite!.name), url);
+            (this.sprite!.avatar.parts ?? []).forEach((part, i) => {
+                const partUrl = this.sprite!.type === SpriteType.CUSTOM ? convertFileSrc(part.src) : part.src;
+                this.load.image(avatarPartKey(this.sprite!.name, i), partUrl);
+            });
             return;
         }
 
