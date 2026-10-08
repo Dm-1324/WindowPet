@@ -43,6 +43,10 @@ const ACTION_NAMES: { [action: string]: string } = {
     movie: "Movie night",
     dance: "Dance",
     greet: "Say hi",
+    angry: "Angry mood 😤",
+    sad: "Emotional mood 🥺",
+    attention: "Attention-seeking mood 👀",
+    feed: "Give a snack 🍪",
     normal: "Back to normal",
 };
 
@@ -166,6 +170,10 @@ function Companion() {
                     ))}
                 </SimpleGrid>
                 <Text fz="xs" c="dimmed" mt="xs">
+                    Cheer it up: rub your cursor back and forth over it to pet it, or give it a snack
+                    (drag the snack onto it). Angry needs 4 hearts, sad 3; a pet is 1 heart, a snack 2.
+                </Text>
+                <Text fz="xs" c="dimmed" mt={4}>
                     App lists, shortcuts and timings can be changed in src/config/my_avatar.json
                 </Text>
             </Paper>

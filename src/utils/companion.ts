@@ -177,6 +177,10 @@ export const DEFAULT_HOTKEYS: { [action: string]: string } = {
     movie: "CommandOrControl+Alt+M",
     dance: "CommandOrControl+Alt+D",
     greet: "CommandOrControl+Alt+H",
+    angry: "CommandOrControl+Alt+A",
+    sad: "CommandOrControl+Alt+E",
+    attention: "CommandOrControl+Alt+T",
+    feed: "CommandOrControl+Alt+C",
     normal: "CommandOrControl+Alt+N",
 };
 

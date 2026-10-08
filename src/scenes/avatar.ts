@@ -124,6 +124,9 @@ interface IPose {
     light?: string;
     // flat colour wash over the whole character, "r,g,b,a" (e.g. red with anger)
     tint?: string;
+    // a cookie in hand: how much is left (1 = whole), held at the mouth or lower down
+    snack?: number;
+    snackAtMouth?: boolean;
 }
 
 interface IAvatarStateDef {
@@ -331,6 +334,46 @@ export const AVATAR_STATE_DEFS: IAvatarStateDef[] = [
                     legL: { dy: -0.03 * hop },
                     legR: { dy: -0.03 * hop },
                 },
+            };
+        },
+    },
+    {
+        // petted / cheered up
+        state: "happy", frames: 16, frameRate: 12, anchor: "ground",
+        pose: (t) => {
+            const hop = Math.abs(sin(2 * TAU * t));
+            return {
+                rot: 0.1 * sin(TAU * t),
+                dy: -0.05 * hop,
+                sy: 0.97 + 0.05 * hop, sx: 1.03 - 0.03 * hop,
+                eyes: "happy",
+                tint: "255,130,160,0.07",
+                limbs: {
+                    armL: { raise: 0.8 + 0.4 * sin(2 * TAU * t) },
+                    armR: { raise: 0.8 - 0.4 * sin(2 * TAU * t) },
+                },
+            };
+        },
+    },
+    {
+        // munching a snack: two bites, then a happy wiggle
+        state: "eat", frames: 16, frameRate: 10, anchor: "ground",
+        pose: (t, i) => {
+            const phase = i % 8;
+            const lifting = phase < 3;
+            const chewing = phase >= 3 && phase < 7;
+            const wiggle = i >= 14;
+            return {
+                sy: 0.9 + (chewing ? 0.02 * (phase % 2 === 0 ? 1 : -1) : 0),
+                sx: 1.05,
+                rot: wiggle ? 0.06 * (i % 2 === 0 ? 1 : -1) : 0,
+                eyes: chewing || wiggle ? "happy" : "open",
+                limbs: {
+                    armL: { raise: 0.3 },
+                    armR: { raise: lifting ? 0.4 + phase * 0.3 : chewing ? 1.3 : 0.4 },
+                },
+                snack: wiggle ? undefined : 1 - Math.floor(i / 8) * 0.45 - (chewing ? 0.2 : 0),
+                snackAtMouth: chewing || phase === 2,
             };
         },
     },
@@ -1187,6 +1230,22 @@ function drawGlasses(ctx: CanvasRenderingContext2D, kind: string, eyes: { x: num
     ctx.stroke();
 }
 
+function drawCookie(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
+    ctx.fillStyle = "#d9a05b";
+    ctx.strokeStyle = "#8d5a2b";
+    ctx.lineWidth = Math.max(1, r * 0.12);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#4e2c14";
+    [[-0.35, -0.3], [0.3, -0.15], [-0.1, 0.35], [0.35, 0.35], [-0.45, 0.15]].forEach(([cx, cy]) => {
+        ctx.beginPath();
+        ctx.arc(x + cx * r, y + cy * r, r * 0.13, 0, TAU);
+        ctx.fill();
+    });
+}
+
 function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, top: number, eyeY: number, half: number) {
     const cupW = half * 0.38, cupH = half * 0.7;
     ctx.strokeStyle = "#37474f";
@@ -1318,6 +1377,17 @@ export function buildAvatarSheet(
                 drawGlasses(ctx, wardrobe.glasses, eyes);
             }
             if (wardrobe.hat && wardrobe.hat !== "none") drawHat(ctx, wardrobe.hat, top.x, top.y, hw);
+        }
+
+        if (pose.snack !== undefined && pose.snack > 0) {
+            const eyes = options.eyes ?? [];
+            const mouth = eyes.length
+                ? toLocal(eyes.reduce((s, e) => s + e.x, 0) / eyes.length, eyes.reduce((s, e) => s + e.y + e.ry * 1.5, 0) / eyes.length)
+                : { x: 0, y: -h * 0.5 };
+            const at = pose.snackAtMouth
+                ? { x: mouth.x + h * 0.1, y: mouth.y + h * 0.03 }
+                : { x: mouth.x + h * 0.2, y: mouth.y + h * 0.28 };
+            drawCookie(ctx, at.x, at.y, h * 0.1 * (0.45 + 0.55 * pose.snack));
         }
     };
 

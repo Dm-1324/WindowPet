@@ -76,6 +76,14 @@ interface Pet extends Phaser.Types.Physics.Arcade.SpriteWithDynamicBody {
     // cursor-looking: what it wants to do and since how many checks (avoids flicker)
     lookWant?: string;
     lookWantCount?: number;
+    // a bad mood and how much comfort it still needs (petting = 1, snack = 2)
+    mood?: { state: string; need: number; progress: number };
+    moodPill?: Phaser.GameObjects.Container | null;
+    // mood to go back to after walking over to eat a snack
+    resumeMood?: { state: string; mode: boolean };
+    // petting detection: cursor direction changes while over the pet
+    rub?: { lastX: number; dir: number; flips: number[] };
+    lastPettedAt?: number;
     nextParticleAt?: number;
     lastGreetAt?: number;
     downInfo?: { x: number; y: number; t: number };
@@ -119,6 +127,8 @@ export default class Pets extends Phaser.Scene {
         "attention",
         "look",
         "lookup",
+        "happy",
+        "eat",
     ];
     private readonly FRAME_RATE: number = 9;
     private readonly UPDATE_DELAY: number = 1000 / this.FRAME_RATE;
@@ -164,7 +174,14 @@ export default class Pets extends Phaser.Scene {
         laptop: "Work mode 💻",
         game: "Gaming time! 🎮",
         movie: "Movie night 🍿",
+        angry: "Grr… I'm angry! 😤\n(pet me or feed me 🍪)",
+        sad: "I'm feeling sad… 🥺\n(pet me or feed me 🍪)",
+        attention: "Pay attention to me! 👀",
     };
+    // bad moods and how much comfort cures them
+    private readonly MOOD_NEED: { [state: string]: number } = { angry: 4, sad: 3, attention: 1 };
+    private readonly SNACKS: string[] = ["🍪", "🍩", "🍎", "🍓", "🧁", "🍕", "🍙", "🥟", "🍫"];
+    private foods: (Phaser.GameObjects.Text & { isFood: true; dragging?: boolean; bornAt: number })[] = [];
     // last time the user hovered / clicked / dragged a pet
     private lastInteraction: number = 0;
     private registeredHotkeys: string[] = [];
@@ -222,6 +239,15 @@ export default class Pets extends Phaser.Scene {
         autoMovie: ["Ooh, what are we watching on {app}? 🍿", "Movie buddy! 🎬", "Popcorn time! 🍿"],
         autoGame: ["Can I play {app} too? 🎮", "Game on! 🕹️", "Go go go! 🎮"],
         acknowledged: ["👍 Got it!", "Okay! ✅", "Noted! 👍"],
+        angryHint: ["Hmph! 😤 (pet me or feed me 🍪)", "Grr… still mad! 💢 (a snack might help)"],
+        calming: ["Hmph… okay, a little better", "…keep going 😤", "*grumble*… fine…"],
+        sadPartial: ["*sniff* …thank you", "That helps a little 🥲", "…more hugs? 🥺"],
+        curedAngry: ["…okay, I'm not mad anymore 💕", "Fine, you're forgiven 😌💕", "Thanks… I needed that 💕"],
+        curedSad: ["Thank you! I feel so much better 🥰", "Yay, I'm happy again! 💖", "You're the best! 💖"],
+        petted: ["Hehe~ 💕", "That tickles! 😆", "Purr~ 💕", "More pets please! 🥰"],
+        sleepPetted: ["*happy snore* 💤", "Mmm… 💕💤"],
+        yum: ["Yum! 😋", "Nom nom nom 🍪", "Delicious! 😋", "Thanks for the snack! 💕"],
+        foodSpotted: ["Ooh, a snack! 😮", "Food?! 🤤", "Is that for me?! 😍"],
         song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
         followOn: ["I'll follow you! 🐾", "Lead the way! 🐾"],
         followOff: ["Okay, I'll hang out here 🙂", "Staying put! 🐾"],
@@ -329,6 +355,7 @@ export default class Pets extends Phaser.Scene {
         this.input.on(
             "gameobjectdown",
             (pointer: Phaser.Input.Pointer, pet: Pet) => {
+                if ((pet as any).isFood) return;
                 pet.downInfo = { x: pointer.x, y: pointer.y, t: this.time.now };
                 this.lastInteraction = this.time.now;
             }
@@ -336,6 +363,7 @@ export default class Pets extends Phaser.Scene {
         this.input.on(
             "gameobjectup",
             (pointer: Phaser.Input.Pointer, pet: Pet) => {
+                if ((pet as any).isFood) return;
                 const down = pet.downInfo;
                 pet.downInfo = undefined;
                 if (!down) return;
@@ -343,6 +371,11 @@ export default class Pets extends Phaser.Scene {
                 if (moved > 6 || this.time.now - down.t > 500) return;
                 this.reactToClick(pet);
             }
+        );
+
+        // rubbing the cursor back and forth over a pet = petting
+        this.inputManager.setOnMouseSample((x: number, _y: number, hits: Phaser.GameObjects.GameObject[]) =>
+            this.detectPetting(x, hits)
         );
 
         // mouse comes near a pet -> it turns to you and greets (with a cooldown)
@@ -356,6 +389,12 @@ export default class Pets extends Phaser.Scene {
             (pointer: any, pet: Pet, dragX: number, dragY: number) => {
                 pet.x = dragX;
                 pet.y = dragY;
+                if ((pet as any).isFood) {
+                    // carrying a snack around
+                    (pet as any).dragging = true;
+                    if (pet.body!.enable) pet.body!.enable = false;
+                    return;
+                }
 
                 if (
                     pet.anims &&
@@ -386,6 +425,10 @@ export default class Pets extends Phaser.Scene {
 
         this.input.on("dragend", (pointer: any, pet: Pet) => {
             this.lastInteraction = this.time.now;
+            if ((pet as any).isFood) {
+                this.dropFood(pet as any, pointer);
+                return;
+            }
             // thrown hard? it'll be grumpy once it lands
             const speed = Math.hypot(pointer.velocity.x, pointer.velocity.y);
             if (pet.isAvatar && speed > 18 && !pet.mode) {
@@ -450,6 +493,7 @@ export default class Pets extends Phaser.Scene {
                 right: boolean
             ) => {
                 const pet = body.gameObject as Pet;
+                if ((pet as any).isFood) return;
                 // if crawl to world bounds, we make the pet jump or spawn on the ground
                 if (
                     pet.anims &&
@@ -632,6 +676,7 @@ export default class Pets extends Phaser.Scene {
             if (pet.id === petId) {
                 this.clearBubble(pet);
                 this.setTimerPill(pet, null);
+                pet.moodPill?.destroy();
                 pet.destroy();
 
                 // get pet that use the same texture as the pet that is destroyed
@@ -1291,7 +1336,8 @@ export default class Pets extends Phaser.Scene {
         if (pet.anims.getName() === key) return false;
 
         pet.canPlayRandomState = false;
-        this.switchState(pet, state, { repeat: state === "dance" ? 2 : 1 });
+        const repeats: { [s: string]: number } = { dance: 2, eat: 0, happy: 0 };
+        this.switchState(pet, state, { repeat: repeats[state] ?? 1 });
 
         if (pet.reactionHandler) pet.off("animationcomplete", pet.reactionHandler);
         pet.reactionHandler = (anim: Phaser.Animations.Animation) => {
@@ -1343,15 +1389,12 @@ export default class Pets extends Phaser.Scene {
                 this.showBubble(pet, this.pick(this.LINES.movieBusy));
                 return;
             case "angry":
-                this.showBubble(pet, this.pick(this.LINES.angryBusy));
+                // clicking doesn't calm it down; petting or a snack does
+                this.showBubble(pet, this.pick(this.LINES.angryHint));
                 return;
             case "sad":
-                // comfort it
-                this.endActivity(pet);
-                this.showBubble(pet, this.pick(this.LINES.comforted));
-                this.switchState(pet, "stand");
-                this.time.delayedCall(900, () => this.playReaction(pet, "greet"));
-                pet.lastGreetAt = this.time.now;
+                // a click is a little comfort
+                this.comfort(pet, 1);
                 return;
             case "attention":
                 this.noticed(pet);
@@ -1452,6 +1495,10 @@ export default class Pets extends Phaser.Scene {
         pet.canPlayRandomState = false;
         pet.nextParticleAt = this.time.now + 800;
         if (state === "attention") this.lastInteraction = this.time.now;
+        if (this.MOOD_NEED[state]) {
+            if (!pet.mood || pet.mood.state !== state) pet.mood = { state, need: this.MOOD_NEED[state], progress: 0 };
+            this.updateMoodPill(pet);
+        }
 
         const lines = this.LINES[`${state}Start`];
         const text = line ?? (mode ? this.MODES[state] : lines ? this.pick(lines) : undefined);
@@ -1467,8 +1514,12 @@ export default class Pets extends Phaser.Scene {
         this.time.delayedCall(700, () => this.playReaction(pet, "dance"));
     }
 
-    endActivity(pet: Pet, finished: boolean = false): void {
+    endActivity(pet: Pet, finished: boolean = false, keepMood: boolean = false): void {
         const was = pet.activity;
+        if (!keepMood) {
+            pet.mood = undefined;
+            this.updateMoodPill(pet);
+        }
         pet.activity = undefined;
         pet.activityUntil = undefined;
         pet.mode = false;
@@ -1630,6 +1681,11 @@ export default class Pets extends Phaser.Scene {
             if (!pet) continue;
             const head = this.headPoint(pet);
             let y = head.y - 2;
+            if (pet.moodPill) {
+                const half = pet.moodPill.width / 2;
+                pet.moodPill.setPosition(Phaser.Math.Clamp(head.x, half + 4, screenW - half - 4), Math.max(y, 28));
+                y -= pet.moodPill.height + 4;
+            }
             if (pet.timerPill) {
                 const half = pet.timerPill.width / 2;
                 pet.timerPill.setPosition(Phaser.Math.Clamp(head.x, half + 4, screenW - half - 4), Math.max(y, 28));
@@ -1694,7 +1750,10 @@ export default class Pets extends Phaser.Scene {
     // look at the cursor when it's near; walk after it in follow mode
     updateLookAndFollow(): void {
         const mouse = this.inputManager.getMouse();
-        if (mouse.x < 0) return;
+        if (mouse.x < 0) {
+            this.forEachAvatar((pet) => this.seekFood(pet));
+            return;
+        }
         const recent = Date.now() - mouse.movedAt < 6000;
 
         this.forEachAvatar((pet) => {
@@ -1703,9 +1762,13 @@ export default class Pets extends Phaser.Scene {
                 if (pet.activity) this.endActivity(pet);
                 pet.pendingActivity = undefined;
             }
+            // a snack is around: go get it (everything else can wait)
+            if (this.seekFood(pet)) return;
+
             // canStartActivity: on the ground, including "just landed" (finished fall animation)
             if (pet.activity || pet.pendingActivity || !this.canStartActivity(pet)) return;
             const state = this.currentState(pet);
+            if (state === "eat" || state === "happy") return; // let it finish
             const dx = mouse.x - pet.x;
             const head = this.headPoint(pet);
             const above = mouse.y < head.y - 30 && Math.abs(dx) < 160;
@@ -2081,6 +2144,208 @@ export default class Pets extends Phaser.Scene {
         }
     }
 
+    // ---------- moods, petting, feeding ----------
+
+    // hearts above the head while it's upset: ❤️ comfort received, 🤍 still needed
+    updateMoodPill(pet: Pet): void {
+        pet.moodPill?.destroy();
+        pet.moodPill = null;
+        const m = pet.mood;
+        if (!m || m.need <= 1) return;
+        const text = `${m.state === "angry" ? "💢" : "💧"} ${"❤️".repeat(m.progress)}${"🤍".repeat(Math.max(0, m.need - m.progress))}`;
+        const label = this.add
+            .text(0, -3, text, { fontFamily: '"Segoe UI Emoji", "Segoe UI", sans-serif', fontSize: "12px" })
+            .setOrigin(0.5, 1)
+            .setResolution(window.devicePixelRatio || 1);
+        const w = Math.ceil(label.width + 16), h = 20;
+        const g = this.add.graphics();
+        g.fillStyle(0x3b2f2f, 0.85);
+        g.fillRoundedRect(-w / 2, -h, w, h, 10);
+        pet.moodPill = this.add.container(0, 0, [g, label]).setDepth(10).setSize(w, h);
+        this.positionBubbles();
+    }
+
+    // petting or feeding a pet in a bad mood; returns false if it wasn't upset
+    comfort(pet: Pet, points: number): boolean {
+        const m = pet.mood;
+        if (!m) return false;
+        if (m.state === "attention") {
+            this.noticed(pet);
+            return true;
+        }
+        m.progress = Math.min(m.need, m.progress + points);
+        this.spawnParticle(pet, "attention", { texts: ["💕", "❤️"], colors: ["#ff6b9a"] });
+        if (m.progress < m.need) {
+            this.updateMoodPill(pet);
+            this.showBubble(pet, this.pick(m.state === "angry" ? this.LINES.calming : this.LINES.sadPartial));
+            return true;
+        }
+        // all better!
+        const cured = m.state;
+        pet.resumeMood = undefined;
+        this.endActivity(pet);
+        this.switchState(pet, "stand");
+        this.showBubble(pet, this.pick(cured === "angry" ? this.LINES.curedAngry : this.LINES.curedSad), 3500, this.IMPORTANT);
+        this.time.delayedCall(400, () => this.playReaction(pet, "happy", true));
+        for (let k = 0; k < 3; k++) {
+            this.time.delayedCall(k * 250, () => this.spawnParticle(pet, "attention", { texts: ["💖", "✨", "💕"], colors: ["#ff6b9a"] }));
+        }
+        pet.lastGreetAt = this.time.now;
+        return true;
+    }
+
+    // cursor rubbing back and forth over a pet (3 direction changes within 1.5 s)
+    detectPetting(x: number, hits: Phaser.GameObjects.GameObject[]): void {
+        const now = Date.now();
+        for (const obj of hits) {
+            const pet = obj as Pet;
+            if (!pet.isAvatar || !pet.anims) continue;
+            const rub = pet.rub ?? { lastX: x, dir: 0, flips: [] };
+            const dx = x - rub.lastX;
+            if (Math.abs(dx) >= 4) {
+                const dir = Math.sign(dx);
+                if (rub.dir !== 0 && dir !== rub.dir) rub.flips.push(now);
+                rub.dir = dir;
+                rub.lastX = x;
+            }
+            rub.flips = rub.flips.filter((t) => now - t < 1500);
+            pet.rub = rub;
+            if (rub.flips.length >= 3 && now - (pet.lastPettedAt ?? 0) > 1200) {
+                rub.flips = [];
+                pet.lastPettedAt = now;
+                this.petted(pet);
+            }
+        }
+    }
+
+    petted(pet: Pet): void {
+        this.lastInteraction = this.time.now;
+        if (this.comfort(pet, 1)) return;
+        this.spawnParticle(pet, "attention", { texts: ["💕", "❤️", "💗"], colors: ["#ff6b9a"] });
+        if (pet.activity === "sleep") {
+            this.showBubble(pet, this.pick(this.LINES.sleepPetted), this.BUBBLE_DURATION, this.CASUAL);
+            return;
+        }
+        if (!pet.activity && this.isOnGround(pet)) this.playReaction(pet, "happy", true);
+        this.showBubble(pet, this.pick(this.LINES.petted));
+    }
+
+    // a snack drops at the cursor (or above the pet)
+    spawnFood(): void {
+        const mouse = this.inputManager.getMouse();
+        const first = this.pets.find((p) => p && p.isAvatar);
+        const bounds = this.physics.world.bounds;
+        const x = mouse.x >= 0 ? mouse.x : first ? first.x : bounds.width / 2;
+        const y = mouse.x >= 0 ? Math.min(mouse.y, bounds.height - 40) : 40;
+
+        const food = this.add
+            .text(x, y, this.pick(this.SNACKS), { fontFamily: '"Segoe UI Emoji", sans-serif', fontSize: "30px" })
+            .setOrigin(0.5)
+            .setResolution(window.devicePixelRatio || 1)
+            .setDepth(8) as any;
+        food.isFood = true;
+        food.bornAt = this.time.now;
+        this.physics.add.existing(food);
+        const body = food.body as Phaser.Physics.Arcade.Body;
+        body.setCollideWorldBounds(true);
+        body.setBounce(0.3, 0.3);
+        body.setDragX(120);
+        food.setInteractive({ draggable: true });
+        this.foods.push(food);
+
+        this.forEachAvatar((pet) => {
+            if (pet.activity === "sleep" && pet.mode) return;
+            this.showBubble(pet, this.pick(this.LINES.foodSpotted));
+        });
+        // nobody ate it? it disappears after a while
+        this.time.delayedCall(60000, () => this.removeFood(food));
+    }
+
+    removeFood(food: any): void {
+        this.foods = this.foods.filter((f) => f !== food);
+        food.destroy();
+    }
+
+    // a snack dragged onto a pet is eaten right away; otherwise it falls
+    dropFood(food: any, pointer: any): void {
+        food.dragging = false;
+        const body = food.body as Phaser.Physics.Arcade.Body;
+        body.enable = true;
+        body.setVelocity(pointer.velocity.x * 20, pointer.velocity.y * 20);
+        const pet = this.pets.find(
+            (p) => p && p.isAvatar && p.anims && Phaser.Geom.Rectangle.Contains(p.getBounds(), food.x, food.y)
+        );
+        if (pet) this.eatFood(pet, food);
+    }
+
+    // walks over to the nearest snack; true while it's busy with food
+    seekFood(pet: Pet): boolean {
+        if (this.foods.length === 0) return false;
+        const focusing = pet.mode && pet.activity === "laptop" && this.focus.phase === "work";
+        if (focusing || pet.awayMode || !this.canStartActivity(pet)) return false;
+        const state = this.currentState(pet);
+        if (state === "eat") return true;
+
+        let food: any = null;
+        for (const f of this.foods) {
+            if (f.dragging) continue;
+            if (!food || Math.abs(f.x - pet.x) < Math.abs(food.x - pet.x)) food = f;
+        }
+        if (!food) return false;
+
+        // drop whatever it was doing, but remember a bad mood
+        if (pet.activity) {
+            if (pet.mood) pet.resumeMood = { state: pet.mood.state, mode: !!pet.mode };
+            this.endActivity(pet, false, true);
+        }
+        pet.pendingActivity = undefined;
+
+        const dx = food.x - pet.x;
+        if (Math.abs(dx) < 35 && food.y > pet.y - pet.displayHeight) {
+            this.eatFood(pet, food);
+            return true;
+        }
+        this.setPetLookToTheLeft(pet, dx < 0);
+        if (state !== "walk") this.switchState(pet, "walk");
+        else this.updateDirection(pet, dx < 0 ? Direction.LEFT : Direction.RIGHT);
+        if (Math.abs(dx) > 300) pet.setVelocityX(Math.sign(dx) * this.PET_MOVE_VELOCITY * 2.2);
+        return true;
+    }
+
+    eatFood(pet: Pet, food: any): void {
+        this.removeFood(food);
+        pet.setVelocityX(0);
+        this.lastInteraction = this.time.now;
+        if (pet.activity) {
+            if (pet.mood) pet.resumeMood = { state: pet.mood.state, mode: !!pet.mode };
+            this.endActivity(pet, false, true);
+        }
+        this.playReaction(pet, "eat", true);
+        for (let k = 0; k < 3; k++) {
+            this.time.delayedCall(k * 400, () => this.spawnParticle(pet, "attention", { texts: ["✨", "💕", "😋"], colors: ["#ffb02e", "#ff6b9a"] }));
+        }
+
+        // a snack is worth 2 comfort points
+        const resume = pet.resumeMood;
+        pet.resumeMood = undefined;
+        if (pet.mood) {
+            const m = pet.mood;
+            m.progress = Math.min(m.need, m.progress + 2);
+            if (m.state === "attention" || m.progress >= m.need) {
+                this.time.delayedCall(1700, () => this.comfort(pet, 0));
+            } else {
+                this.updateMoodPill(pet);
+                this.showBubble(pet, this.pick(m.state === "angry" ? this.LINES.calming : this.LINES.sadPartial));
+                // still upset after the snack: back to sulking
+                this.time.delayedCall(1800, () => {
+                    if (pet.mood && resume) this.startActivity(pet, resume.state, resume.mode);
+                });
+            }
+            return;
+        }
+        this.showBubble(pet, this.pick(this.LINES.yum));
+    }
+
     // ---------- keyboard shortcuts ----------
 
     async registerHotkeys(): Promise<void> {
@@ -2112,6 +2377,10 @@ export default class Pets extends Phaser.Scene {
         this.lastInteraction = this.time.now;
         if (action === "focus") {
             this.focus.phase ? this.stopFocus() : this.startFocus();
+            return;
+        }
+        if (action === "feed") {
+            this.spawnFood();
             return;
         }
         if (action === "follow") {

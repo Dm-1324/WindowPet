@@ -320,6 +320,12 @@ export class InputManager {
     // last known cursor position (game coordinates) and when it last moved
     private mouse = { x: -1, y: -1, movedAt: 0 };
 
+    private onMouseSample: ((x: number, y: number, hits: Phaser.GameObjects.GameObject[]) => void) | null = null;
+
+    public setOnMouseSample(callback: (x: number, y: number, hits: Phaser.GameObjects.GameObject[]) => void): void {
+        this.onMouseSample = callback;
+    }
+
     public getMouse(): { x: number; y: number; movedAt: number } {
         return this.mouse;
     }
@@ -345,6 +351,7 @@ export class InputManager {
                 if (Math.abs(mx - this.mouse.x) + Math.abs(my - this.mouse.y) > 3) {
                     this.mouse = { x: mx, y: my, movedAt: Date.now() };
                 }
+                this.onMouseSample?.(mx, my, hits);
 
                 // notify about pets the mouse just moved onto
                 const now = new Set(hits);

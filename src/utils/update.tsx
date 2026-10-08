@@ -10,7 +10,12 @@ import { info, error } from "tauri-plugin-log-api";
 import { ButtonVariant } from '.';
 import i18next from 'i18next';
 
+// This is a customised fork: updates from the original WindowPet releases would
+// replace it with the stock app, so update checks are switched off.
+const UPDATES_ENABLED = false;
+
 export const checkForUpdate = async () => {
+  if (!UPDATES_ENABLED) return false;
   info('Checking for update');
   try {
     const { shouldUpdate, manifest } = await checkUpdate()
