@@ -82,7 +82,7 @@ function About() {
             />
             <Text fw={700}>WindowPet</Text>
             <Text display={"flex"}>{t("Version", { version: appVersion })}
-                <Anchor mx={"xs"} onClick={() => open(`https://github.com/SeakMengs/WindowPet/releases/tag/v${appVersion}`)}>{t("(release note)")}</Anchor>
+                <Anchor mx={"xs"} onClick={() => open(`https://github.com/Dm-1324/WindowPet/releases/tag/v${appVersion}`)}>{t("(release note)")}</Anchor>
             </Text>
             {
                 checkingForUpdate &&

@@ -1,6 +1,6 @@
 [package]
 name = "window_pet"
-version = "1.1.0"
+version = "1.2.0"
 description = "Window Pet"
 authors = ["SeakMengs"]
 license = "MIT"
@@ -13,7 +13,7 @@ edition = "2021"
 tauri-build = { version = "1.5.1", features = [] }
 
 [dependencies]
-tauri = { version = "1.5.4", features = [ "protocol-asset", "process-relaunch", "window-all", "dialog-all", "fs-all", "path-all", "macos-private-api", "system-tray", "shell-open", "global-shortcut-all"] }
+tauri = { version = "1.5.4", features = [ "protocol-asset", "process-relaunch", "updater", "window-all", "dialog-all", "fs-all", "path-all", "macos-private-api", "system-tray", "shell-open", "global-shortcut-all"] }
 serde = { version = "1.0.195", features = ["derive"] }
 serde_json = "1.0.111"
 mouse_position = "0.1.3"

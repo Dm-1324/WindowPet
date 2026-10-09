@@ -11,22 +11,15 @@ function Updater({ shouldUpdate, manifest }: UpdaterPopupProps) {
     const [markdown, setMarkDown] = useState<string>();
 
     useEffect(() => {
-        const getReleaseNote = async () => {
-            const res = await fetch(`https://api.github.com/repos/SeakMengs/WindowPet/releases/latest`);
-
-            if (res.ok) {
-                const json = await res.json();
-                setMarkDown(json.body);
-            }
-        }
-        getReleaseNote();
-    }, []);
+        // the release notes come with the update itself
+        setMarkDown(manifest?.body ?? "");
+    }, [manifest]);
 
     return (
         <>
             <Box>
                 <Text display={"inline"}>{t("WindowPet v available, do you want to install the update?", { version: manifest?.version })}
-                    <Anchor mx={"xs"} onClick={() => open(`https://github.com/SeakMengs/WindowPet/releases/latest`)}>{t("(release note)")}</Anchor>
+                    <Anchor mx={"xs"} onClick={() => open(`https://github.com/Dm-1324/WindowPet/releases/latest`)}>{t("(release note)")}</Anchor>
                 </Text>
                 <Box mx={"lg"}>
                     <Markdown remarkPlugins={[remarkGfm]}>

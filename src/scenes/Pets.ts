@@ -19,6 +19,7 @@ import { avatarMeta, IAvatarPersonality } from "./avatar";
 import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortcut";
 import { invoke } from "@tauri-apps/api/tauri";
 import { applyLockScreen } from "../utils/lockscreen";
+import { checkUpdate } from "@tauri-apps/api/updater";
 import { createAvatarTexture, AVATAR_STATE_DEFS } from "./avatar";
 import {
     appName,
@@ -288,6 +289,7 @@ export default class Pets extends Phaser.Scene {
         yum: ["Yum! 😋", "Nom nom nom 🍪", "Delicious! 😋", "Thanks for the snack! 💕"],
         foodSpotted: ["Ooh, a snack! 😮", "Food?! 🤤", "Is that for me?! 😍"],
         song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
+        update: ["A new version is here! ✨ v{v}\nOpen Settings to update me", "Psst… update v{v} is ready 🎁\nTray → Setting to install"],
         peekaboo: ["Peekaboo! 👋 I'm back", "Ta-da! ✨ Did you miss me?", "I'm baaack! 😊"],
         followOn: ["I'll follow you! 🐾", "Lead the way! 🐾"],
         followOff: ["Okay, I'll hang out here 🙂", "Staying put! 🐾"],
@@ -394,6 +396,9 @@ export default class Pets extends Phaser.Scene {
         this.time.delayedCall(3000, () => this.refreshWeather());
         this.time.addEvent({ delay: 5 * 60000, loop: true, callback: () => this.refreshWeather() });
         this.time.delayedCall(20000, () => this.refreshLockScreen());
+        // new version on GitHub? the pet tells you (once per version)
+        this.time.delayedCall(60000, () => this.checkForAppUpdate());
+        this.time.addEvent({ delay: 6 * 3600000, loop: true, callback: () => this.checkForAppUpdate() });
         this.time.addEvent({ delay: 10 * 60000, loop: true, callback: () => this.refreshLockScreen() });
         window.addEventListener("storage", this.onStorage);
         this.events.once("destroy", () => window.removeEventListener("storage", this.onStorage));
@@ -2197,6 +2202,31 @@ export default class Pets extends Phaser.Scene {
         // cloudy is only worth mentioning the first time
         if (kind === "cloudy" && !first) return;
         this.forEachAvatar((pet) => this.showBubble(pet, lines[kind], 4500, this.NORMAL));
+    }
+
+    async checkForAppUpdate(): Promise<void> {
+        try {
+            const { shouldUpdate, manifest } = await checkUpdate();
+            if (!shouldUpdate || !manifest) return;
+            const key = "windowpet.updateAnnounced";
+            let announced: string | null = null;
+            try {
+                announced = localStorage.getItem(key);
+            } catch {
+                // storage unavailable: announce anyway
+            }
+            if (announced === manifest.version) return;
+            try {
+                localStorage.setItem(key, manifest.version);
+            } catch {
+                // ignore
+            }
+            info(`Update available: ${manifest.version}`);
+            this.deliver(this.pick(this.LINES.update).replace("{v}", manifest.version), 12000);
+        } catch (err) {
+            // offline, or no release yet: try again later
+            info(`Update check skipped: ${err}`);
+        }
     }
 
     // ---- lock screen picture (every 3 hours when turned on)
