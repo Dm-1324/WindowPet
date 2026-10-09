@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import {
     Box,
+    Button,
     CheckIcon,
     ColorSwatch,
     Divider,
@@ -16,7 +17,8 @@ import {
 } from "@mantine/core";
 import PhaserCanvas from "../components/PhaserCanvas";
 import defaultPetConfig from "../../config/pet_config";
-import { IWardrobeSettings, loadWardrobe, saveWardrobe } from "../../utils/companion";
+import { IconCheck, IconRestore } from "@tabler/icons-react";
+import { effectiveWardrobe, IWardrobeSettings, loadWardrobe, saveWardrobe } from "../../utils/companion";
 import { emitUpdatePetsEvent } from "../../utils/event";
 import { DispatchType } from "../../types/IEvents";
 
@@ -64,22 +66,40 @@ function Row({ title, description, children }: { title: string; description?: st
 }
 
 function Wardrobe() {
-    const [wardrobe, setWardrobe] = useState<IWardrobeSettings>(loadWardrobe());
+    // what's applied to the pet vs. what you're trying on in the preview
+    const [applied, setApplied] = useState<IWardrobeSettings>(loadWardrobe());
+    const [wardrobe, setWardrobe] = useState<IWardrobeSettings>(applied);
     const [previewState, setPreviewState] = useState("stand");
     const [birthday, setBirthday] = useState(wardrobe.birthday ?? "");
+    const [justApplied, setJustApplied] = useState(false);
 
-    // the avatar pet from the built-in list (outfits apply to all avatar pets)
+    const dirty = JSON.stringify(wardrobe) !== JSON.stringify(applied);
+
+    // the preview wears the draft outfit (plus seasonal / weather extras, like the real pet)
     const avatar = useMemo(() => {
         const found = defaultPetConfig.find((p) => p.avatar);
-        return found ? JSON.parse(JSON.stringify(found)) : null;
-    }, []);
+        if (!found) return null;
+        const pet = JSON.parse(JSON.stringify(found));
+        pet.avatar = { ...pet.avatar, wardrobe: effectiveWardrobe(new Date(), wardrobe) };
+        return pet;
+    }, [wardrobe]);
 
     const update = (patch: Partial<IWardrobeSettings>) => {
-        const next = { ...wardrobe, ...patch };
-        setWardrobe(next);
-        saveWardrobe(next);
+        setWardrobe({ ...wardrobe, ...patch });
+        setJustApplied(false);
+    };
+
+    const apply = () => {
+        saveWardrobe(wardrobe);
+        setApplied(wardrobe);
+        setJustApplied(true);
         // the overlay also listens to storage changes; the event is a fallback
-        emitUpdatePetsEvent({ dispatchType: DispatchType.WardrobeChanged, newValue: JSON.stringify(next) });
+        emitUpdatePetsEvent({ dispatchType: DispatchType.WardrobeChanged, newValue: JSON.stringify(wardrobe) });
+    };
+
+    const reset = () => {
+        setWardrobe(applied);
+        setBirthday(applied.birthday ?? "");
     };
 
     const birthdayValid = birthday === "" || /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday);
@@ -87,7 +107,7 @@ function Wardrobe() {
     return (
         <Stack gap="md">
             {avatar && (
-                <Paper withBorder radius="md" p="md">
+                <Paper withBorder radius="lg" p="md" style={{ position: "sticky", top: 0, zIndex: 2, background: "var(--wp-surface)" }}>
                     <Group justify="space-between" align="center" wrap="nowrap">
                         <Box w={160} h={160} style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
                             {/* remount the preview whenever the outfit changes */}
@@ -95,10 +115,22 @@ function Wardrobe() {
                         </Box>
                         <Stack gap={6} style={{ flex: 1 }}>
                             <Text fw={600}>Preview</Text>
-                            <Text fz="xs" c="dimmed">
-                                Changes apply right away. Your pet will be happy about new clothes ✨
+                            <Text fz="xs" c={dirty ? undefined : "dimmed"}>
+                                {dirty
+                                    ? "Trying it on. Your pet won't wear this until you apply it."
+                                    : justApplied
+                                        ? "Applied! Your pet loves the new look ✨"
+                                        : "This is what your pet is wearing. Pick something new to try it on."}
                             </Text>
                             <SegmentedControl size="xs" data={PREVIEW_STATES} value={previewState} onChange={setPreviewState} />
+                            <Group gap="xs" mt={4}>
+                                <Button size="xs" leftSection={<IconCheck size="0.9rem" />} disabled={!dirty || !birthdayValid} onClick={apply}>
+                                    Apply outfit
+                                </Button>
+                                <Button size="xs" variant="subtle" color="gray" leftSection={<IconRestore size="0.9rem" />} disabled={!dirty} onClick={reset}>
+                                    Undo changes
+                                </Button>
+                            </Group>
                         </Stack>
                     </Group>
                 </Paper>

@@ -1,0 +1,23 @@
+.hero {
+    padding: 20px 22px;
+    border-radius: 20px;
+    background: light-dark(#ffffff, #2a2136);
+    border: 1px solid var(--mantine-color-default-border);
+}
+
+.name {
+    font-family: var(--wp-display);
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.row {
+    padding: 12px 4px;
+    border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.rowIcon {
+    flex-shrink: 0;
+    color: var(--mantine-color-leaf-6);
+}

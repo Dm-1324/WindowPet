@@ -5,8 +5,8 @@ import { error } from "tauri-plugin-log-api";
 import { convertFileSrc } from '@tauri-apps/api/tauri';
 import { isAbsolute } from '@tauri-apps/api/path';
 
-export const PrimaryColor = 'pink';
-export const ButtonVariant = 'outline';
+export const PrimaryColor = 'leaf';
+export const ButtonVariant = 'light';
 export const CanvasSize = 224;
 
 export const noPetDialog = () => {

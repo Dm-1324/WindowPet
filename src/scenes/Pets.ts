@@ -235,6 +235,10 @@ export default class Pets extends Phaser.Scene {
     private unlockedAt: number = -Infinity;
     // hidden from the tray or Ctrl+Alt+X: the window is invisible and the game is paused
     private hidden: boolean = false;
+    // shown only to deliver a reminder / timer while hidden: hides again afterwards
+    private peeking: boolean = false;
+    private peekQuietSince: number = 0;
+    private hiddenWatch: number | null = null;
     private onStorage = (e: StorageEvent) => {
         if (e.key === WARDROBE_KEY) this.wardrobeChanged();
         if (e.key === COMPANION_KEY) this.companionChanged();
@@ -1422,6 +1426,11 @@ export default class Pets extends Phaser.Scene {
         if (this.nagging) {
             this.nagging = null;
             this.showBubble(pet, this.pick(this.LINES.acknowledged), this.BUBBLE_DURATION, this.IMPORTANT);
+            if (this.peeking) setTimeout(() => this.endPeek(), 1500);
+            return;
+        }
+        if (this.peeking) {
+            this.endPeek();
             return;
         }
         switch (pet.activity) {
@@ -2033,6 +2042,37 @@ export default class Pets extends Phaser.Scene {
             nag.nextAt = nowMs + 120000;
             if (nag.left <= 0) this.nagging = null;
         }
+
+        // came out of hiding for something: go back once it's been seen
+        if (this.peeking) {
+            if (this.nagging) this.peekQuietSince = nowMs;
+            else if (nowMs - this.peekQuietSince > 15000) this.endPeek();
+        }
+    }
+
+    // while hidden the game is paused, so a plain timer watches for things that can't wait
+    watchWhileHidden(on: boolean): void {
+        if (this.hiddenWatch !== null) {
+            window.clearInterval(this.hiddenWatch);
+            this.hiddenWatch = null;
+        }
+        if (!on) return;
+        this.hiddenWatch = window.setInterval(() => {
+            const now = Date.now();
+            const reminderDue = loadReminders().some((r) => r.at <= now);
+            const timerDone = this.focus.phase !== null && now >= this.focus.endsAt;
+            if (!reminderDue && !timerDone) return;
+            this.peeking = true;
+            this.peekQuietSince = now;
+            info("Peeking out of hiding for a reminder / timer");
+            invoke("set_pets_visible", { visible: true }).catch((err) => error(`Peek: ${err}`));
+        }, 5000);
+    }
+
+    endPeek(): void {
+        if (!this.peeking) return;
+        this.peeking = false;
+        invoke("set_pets_visible", { visible: false }).catch((err) => error(`Hide again: ${err}`));
     }
 
     // true while locked (nothing else should react)
@@ -2640,13 +2680,18 @@ export default class Pets extends Phaser.Scene {
         if (hide === this.hidden) return;
         this.hidden = hide;
         if (hide) {
+            this.peeking = false;
             this.forEachAvatar((pet) => this.clearBubble(pet));
             // nothing to draw: pause the game loop so it uses no CPU
             this.game.loop.sleep();
+            this.watchWhileHidden(true);
             return;
         }
+        this.watchWhileHidden(false);
         this.game.loop.wake();
         this.lastInteraction = this.time.now;
+        // out for a reminder: it will say what it's here for
+        if (this.peeking) return;
         this.forEachAvatar((pet) => {
             this.showBubble(pet, this.pick(this.LINES.peekaboo), 3000, this.IMPORTANT);
             if (this.isFree(pet)) this.time.delayedCall(300, () => this.playReaction(pet, "greet", true));

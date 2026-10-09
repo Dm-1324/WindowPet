@@ -51,12 +51,12 @@
 - Reminders you set in Settings, delivered by the pet until you click it
 
 **Out of the way when you need it**
-- 🙈 Hide the pets instantly with `Ctrl+Alt+X` or *Hide pets* in the tray menu (meetings, screen sharing), and bring them back right where they were. Hidden pets use no CPU.
+- 🙈 Hide your pet instantly with `Ctrl+Alt+X` or *Hide pets* in the tray menu (meetings, screen sharing), and bring it back right where it was. A hidden pet uses no CPU.
+- ⏰ Reminders still reach you while it's hidden: it pops back up to tell you, and hides again once you click it.
 
 **Make it yours**
-- 👕 Wardrobe: hats, glasses, headphones, t-shirts with prints; Santa hat in December, party hat on your birthday
+- 👕 Wardrobe: hats, glasses, headphones, t-shirts with prints. Try outfits on in the preview, then **Apply** the one you like. Santa hat in December, party hat on your birthday
 - Turn every feature on/off and choose how chatty it is (Settings → Companion)
-- All 45+ original WindowPet characters are still available in the Pet Shop
 
 ## ⌨️ Keyboard shortcuts
 
@@ -76,8 +76,10 @@ Work from any app. Pressing a mode's key again turns it off.
 
 1. Download `WindowPet_x.y.z_x64-setup.exe` from the [latest release](https://github.com/Dm-1324/WindowPet/releases/latest)
 2. Run it (no admin rights needed). If Windows says *"Windows protected your PC"*, click **More info → Run anyway**. The app isn't code-signed.
-3. Open **WindowPet** → **Pet Shop** → add **My Avatar**
+3. Your pet appears on the taskbar right away. Open **WindowPet** from the tray icon to dress it up and change settings
 4. Turn on **Settings → Auto start-up** to have it on every boot
+
+**Updating:** WindowPet updates itself. When a new version is out, your pet tells you, and **About → Check for updates** installs it.
 
 Requires Windows 10 or 11 (64-bit).
 
@@ -115,14 +117,14 @@ Releases are built by GitHub Actions: **Actions → Build Windows installer → 
 | Avatar frame generator (poses, eyes, limbs, props, outfits) | `src/scenes/avatar.ts` |
 | Pet behaviour, moods, reactions, companion features | `src/scenes/Pets.ts` |
 | Idle time, foreground app and "now playing" (Windows APIs) | `src-tauri/src/app/system.rs` |
-| Settings tabs: Wardrobe, Reminders, Companion | `src/ui/setting_tabs/` |
+| Settings window: My avatar, Wardrobe, Companion, Reminders, Settings, About | `src/ui/setting_tabs/`, theme in `src/theme.ts` |
 | Shared settings and app/music detection | `src/utils/companion.ts` |
 
 Built with [Tauri](https://tauri.app), React, [Phaser](https://phaser.io) and [Mantine](https://mantine.dev). Everything runs locally: app and media detection never leave your computer.
 
 ## 🙏 Credits
 
-This is a fork of [**WindowPet**](https://github.com/SeakMengs/WindowPet) by [Seakmeng](https://github.com/SeakMengs), which provides the original app, the pet engine and the 45+ characters in the Pet Shop. If you like the original, you can [buy them a coffee](https://www.buymeacoffee.com/seakmeng).
+This is a fork of [**WindowPet**](https://github.com/SeakMengs/WindowPet) by [Seakmeng](https://github.com/SeakMengs), which provides the original app and pet engine. This edition is maintained by [Dhruv (@Dm-1324)](https://github.com/Dm-1324) and focuses on a single custom avatar.
 
 Inspired by [vscode-pets](https://marketplace.visualstudio.com/items?itemName=tonybaloney.vscode-pets), [Shimeji-ee](https://kilkakon.com/shimeji/) and [DPET](https://store.steampowered.com/app/1980920/DPET__Desktop_Pet_Engine/).
 

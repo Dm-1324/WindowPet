@@ -1,99 +1,71 @@
-import { memo, useCallback, useMemo, useState, useEffect } from "react";
-import PetCard from "../components/PetCard";
-import { Box, TextInput } from "@mantine/core";
-import AddCard from "./my_pets/AddCard";
-import { useTranslation } from "react-i18next";
-import { useSettingStore } from "../../hooks/useSettingStore";
-import { ISpriteConfig } from "../../types/ISpriteConfig";
-import { getAppSettings, setConfig } from "../../utils/settings";
-import { notifications } from "@mantine/notifications";
-import { PrimaryColor, noPetDialog } from "../../utils";
-import { IconCheck } from "@tabler/icons-react";
-import { handleSettingChange } from "../../utils/handleSettingChange";
-import { PetCardType } from "../../types/components/type";
-import { DispatchType } from "../../types/IEvents";
-import { ColorSchemeType } from "../../types/ISetting";
-import { usePets } from "../../hooks/usePets";
-import { invoke } from "@tauri-apps/api";
+import { memo, useMemo, useState } from "react";
+import { Box, Button, Chip, Group, Kbd, Stack, Text } from "@mantine/core";
+import { IconEyeOff } from "@tabler/icons-react";
+import { invoke } from "@tauri-apps/api/tauri";
+import PhaserCanvas from "../components/PhaserCanvas";
+import defaultPetConfig from "../../config/pet_config";
+import classes from "./MyPets.module.css";
 
-export function MyPets() {
-    const { refetch, data: initialPets = [] } = usePets();
-    const { t } = useTranslation();
-    const { theme: colorScheme, pets, setPets } = useSettingStore();
-    const [searchQuery, setSearchQuery] = useState("");
-    const [isFirstRemoval, setIsFirstRemoval] = useState(true);
+// the animations worth showing off, in a sensible order
+const ANIMATIONS: [string, string][] = [
+    ["greet", "Wave"],
+    ["walk", "Walk"],
+    ["dance", "Dance"],
+    ["spin", "Spin"],
+    ["happy", "Happy"],
+    ["eat", "Snack"],
+    ["sit", "Sit"],
+    ["laptop", "Work"],
+    ["game", "Game"],
+    ["movie", "Movie"],
+    ["sleep", "Sleep"],
+    ["angry", "Angry"],
+    ["sad", "Sad"],
+    ["attention", "Look at me"],
+    ["tired", "Low battery"],
+    ["hot", "Hot PC"],
+    ["offline", "No internet"],
+];
 
-    const removePet = useCallback(async (petId: string) => {
-        const userPetConfig = await getAppSettings({ configName: "pets.json" });
-        let removedPetName;
-        const newConfig = userPetConfig.filter((pet: ISpriteConfig) => {
-            if (pet.id === petId) removedPetName = pet.name;
-            return pet.id !== petId;
-        });
-
-        await setConfig({ configName: "pets.json", newConfig: newConfig });
-        setPets(newConfig);
-
-        if (newConfig.length === 0) noPetDialog();
-
-        handleSettingChange(DispatchType.RemovePet, petId);
-        if (isFirstRemoval) {
-            try {
-                await invoke("reopen_main_window");
-            } catch (error) {
-                console.warn("Failed to reopen main window:", error);
-            }
-            setIsFirstRemoval(false);
-        }
-
-        notifications.show({
-            message: t("pet name has been removed", { name: removedPetName }),
-            title: t("Pet Removed"),
-            color: PrimaryColor,
-            icon: <IconCheck size="1rem" />,
-            withBorder: true,
-            autoClose: 800,
-            style: (theme) => ({
-                backgroundColor: colorScheme === ColorSchemeType.Dark ? theme.colors.dark[7] : theme.colors.gray[0],
-            })
-        });
-
-        await refetch();
-    }, [t, isFirstRemoval, setIsFirstRemoval]);
-
-    const filteredPets = useMemo(() => {
-        return pets.filter(pet =>
-            pet.name.toLowerCase().includes(searchQuery.toLowerCase())
-        );
-    }, [searchQuery, pets]);
-
-    const PetCards = useMemo(() => {
-        return filteredPets.map((pet: ISpriteConfig) => {
-            return (
-                <PetCard key={pet.id} pet={pet} btnLabel={t("Remove")} type={PetCardType.Remove} btnFunction={() => removePet(pet.id as string)} />
-            );
-        });
-    }, [t, filteredPets, removePet]);
+function MyAvatar() {
+    const [state, setState] = useState("greet");
+    const avatar = useMemo(() => JSON.parse(JSON.stringify(defaultPetConfig[0])), []);
 
     return (
-        <>
-            <TextInput
-                placeholder={t("Search for my pets")}
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.currentTarget.value)}
-                style={{ marginBottom: '1rem', marginLeft: '1rem', marginRight: '1rem' }}
-            />
-            <Box style={{
-                display: "grid",
-                placeItems: "center",
-                gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
-                gridGap: "1rem",
-            }}>
-                {PetCards}
-                <AddCard />
+        <Stack gap="xl">
+            <Box className={classes.stage}>
+                <Box className={classes.canvas}>
+                    <PhaserCanvas pet={avatar} playState={state} key={state} />
+                </Box>
+                <Box className={classes.taskbar} />
             </Box>
-        </>
+
+            <div>
+                <Text fw={700} mb="xs">Animations</Text>
+                <Chip.Group value={state} onChange={(v) => setState(v as string)}>
+                    <Group gap={8}>
+                        {ANIMATIONS.map(([value, label]) => (
+                            <Chip key={value} value={value} size="sm">
+                                {label}
+                            </Chip>
+                        ))}
+                    </Group>
+                </Chip.Group>
+            </div>
+
+            <Group justify="space-between" className={classes.tip} wrap="nowrap">
+                <div>
+                    <Text fw={700}>Need it out of the way?</Text>
+                    <Text fz="sm" c="dimmed">
+                        Press <Kbd>Ctrl</Kbd> + <Kbd>Alt</Kbd> + <Kbd>X</Kbd> anywhere to hide or show it. Reminders still find you.
+                    </Text>
+                </div>
+                <Button variant="light" style={{ flexShrink: 0 }} leftSection={<IconEyeOff size="1rem" />} onClick={() => invoke("toggle_pets_visibility")}>
+                    Hide / show now
+                </Button>
+            </Group>
+        </Stack>
     );
 }
 
-export default memo(MyPets);
+export default memo(MyAvatar);

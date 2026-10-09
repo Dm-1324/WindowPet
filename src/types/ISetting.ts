@@ -13,15 +13,14 @@ export enum ColorSchemeType {
 
 export type ColorScheme = ColorSchemeType.Light | ColorSchemeType.Dark;
 
+// the order of the tabs in the sidebar
 export enum ESettingTab {
-    MyPets = 0,
-    PetShop = 1,
-    AddPet = 2,
-    Settings = 3,
-    About = 4,
-    Wardrobe = 5,
-    Reminders = 6,
-    Companion = 7,
+    MyAvatar = 0,
+    Wardrobe = 1,
+    Companion = 2,
+    Reminders = 3,
+    Settings = 4,
+    About = 5,
 }
 
 export interface ISettingTabs {

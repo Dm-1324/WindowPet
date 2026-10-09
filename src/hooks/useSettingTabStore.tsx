@@ -7,6 +7,6 @@ interface ISettingTabState {
 }
 
 export const useSettingTabStore = create<ISettingTabState>()((set) => ({
-    activeTab: ESettingTab.MyPets,
+    activeTab: ESettingTab.MyAvatar,
     setActiveTab: (activeTab: number) => set({ activeTab }),
 }));

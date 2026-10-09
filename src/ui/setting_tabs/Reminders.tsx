@@ -77,7 +77,7 @@ function Reminders() {
                     />
                     <Group align="flex-end" gap="sm">
                         <SegmentedControl
-                            data={[{ value: "in", label: "In…" }, { value: "at", label: "At a time" }]}
+                            data={[{ value: "in", label: "In minutes" }, { value: "at", label: "At a time" }]}
                             value={mode}
                             onChange={(v) => setMode(v as "in" | "at")}
                         />

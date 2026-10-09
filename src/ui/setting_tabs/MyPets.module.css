@@ -1,0 +1,46 @@
+/* the pet standing on a little taskbar, like on your desktop */
+.stage {
+    position: relative;
+    height: 250px;
+    border-radius: 20px;
+    overflow: hidden;
+    /* a calm little desktop wallpaper */
+    background: linear-gradient(180deg, light-dark(#e6f3df, #2e2440) 0%, light-dark(#fbf3dc, #3a2c3f) 100%);
+    border: 1px solid var(--mantine-color-default-border);
+}
+
+.canvas {
+    position: absolute;
+    left: 50%;
+    /* feet rest on the taskbar */
+    bottom: -24px;
+    transform: translateX(-50%);
+}
+
+.taskbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 22px;
+    background: light-dark(#3c2846, #120c18);
+}
+
+/* start button and pinned apps, so it reads as a taskbar */
+.taskbar::before {
+    content: "";
+    position: absolute;
+    left: 14px;
+    top: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.55);
+    box-shadow: 18px 0 0 rgba(255, 255, 255, 0.25), 36px 0 0 rgba(255, 255, 255, 0.25), 54px 0 0 rgba(255, 255, 255, 0.25);
+}
+
+.tip {
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: light-dark(#eef5e8, #261d31);
+}

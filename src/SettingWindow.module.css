@@ -1,0 +1,66 @@
+.sidebar {
+    background: var(--wp-sidebar);
+}
+
+.mascot {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 18px 12px 0;
+}
+
+/* the one playful thing: the pet greets you from the top of the sidebar */
+.bubble {
+    position: relative;
+    margin-bottom: 8px;
+    padding: 6px 12px;
+    border-radius: 14px;
+    background: #fff6e5;
+    border: 2px solid #5b4636;
+    color: #4a3b33;
+    font-family: var(--wp-display);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -8px;
+    width: 12px;
+    height: 12px;
+    transform: translateX(-50%) rotate(45deg);
+    background: #fff6e5;
+    border-right: 2px solid #5b4636;
+    border-bottom: 2px solid #5b4636;
+}
+
+.pet {
+    transform-origin: 50% 100%;
+    animation: breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes breathe {
+    0%, 100% { transform: scale(1, 1); }
+    50% { transform: scale(1.03, 0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pet { animation: none; }
+}
+
+.appName {
+    margin-top: 6px;
+    font-family: var(--wp-display);
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+}
+
+.page {
+    max-width: 760px;
+    padding: 28px 36px 48px;
+}

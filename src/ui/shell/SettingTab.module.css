@@ -1,36 +1,36 @@
 .link {
-    width: 50px;
-    height: 50px;
-    border-radius: var(--mantine-radius-md);
     display: flex;
     align-items: center;
-    justify-content: center;
-    color: var(--mantine-color-gray-7) !important;
-
-    /* if dark mode */
-    /* check mantine postcss to learn more about mixin and light-dark function */
-    @mixin dark {
-        color: var(--mantine-color-dark-0) !important;
-    }
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: 12px;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--mantine-color-text);
+    transition: background-color 120ms ease;
 
     &:hover {
-        background-color: var(--mantine-color-gray-0);
+        background-color: light-dark(rgba(60, 40, 70, 0.06), rgba(236, 228, 242, 0.07));
+    }
 
-        @mixin dark {
-            background-color: var(--mantine-color-dark-5);
-        }
+    &:focus-visible {
+        outline: 2px solid var(--mantine-color-leaf-6);
+        outline-offset: 2px;
     }
 }
 
+.icon {
+    display: flex;
+    opacity: 0.8;
+}
+
+/* the selected tab wears the pet's sunny yellow */
 .active {
-    background-color: var(--mantine-primary-color-light) !important;
-    color: var(--mantine-primary-color-light-color) !important;
+    background-color: var(--wp-sunny) !important;
+    color: var(--wp-nav-active-text) !important;
 
-    &:hover {
-        background-color: var(--mantine-primary-color-light-hover) !important;
+    & .icon {
+        opacity: 1;
     }
-}
-
-.tooltipLabel {
-    color: var(--mantine-color-white-0) !important;
 }

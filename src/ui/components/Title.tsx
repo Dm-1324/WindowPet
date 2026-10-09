@@ -1,19 +1,13 @@
-import { Box, Flex, Text } from "@mantine/core";
+import { Box, Text, Title as MantineTitle } from "@mantine/core";
 import { ITitleProps } from "../../types/components/type";
-import classes from "./Title.module.css";
 
 function Title({ title, description }: ITitleProps) {
     return (
-        <Flex gap={"lg"}>
-            <Box w={5} h={50} className={classes.title} />
-            <Box>
-                <Text fz={"lg"} fw={500}>{title}</Text>
-                <Text fz={"xs"} c={"dimmed"} mt={3} mb={"xl"}>
-                    {description}
-                </Text>
-            </Box>
-        </Flex>
-    )
+        <Box mb={26}>
+            <MantineTitle order={1} fz={30} lh={1.15}>{title}</MantineTitle>
+            <Text c="dimmed" mt={6} fz={14.5}>{description}</Text>
+        </Box>
+    );
 }
 
 export default Title;

@@ -41,6 +41,12 @@ pub fn toggle_pets_visibility(app: AppHandle) -> bool {
     toggle_pets(&app)
 }
 
+// shows / hides explicitly (a reminder briefly brings hidden pets back)
+#[tauri::command]
+pub fn set_pets_visible(app: AppHandle, visible: bool) {
+    set_pets_hidden(&app, !visible);
+}
+
 pub fn init_system_tray() -> SystemTray {
     let menu = SystemTrayMenu::new()
         .add_item(CustomMenuItem::new("hide".to_string(), "Hide pets 🙈 (Ctrl+Alt+X)"))

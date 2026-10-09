@@ -123,8 +123,8 @@ export function saveWeather(w: IWeather | null): void {
 }
 
 // what the pet actually wears today
-export function effectiveWardrobe(now = new Date()): IWardrobe {
-    const w = loadWardrobe();
+// `w` lets the Wardrobe tab preview an outfit that hasn't been applied yet
+export function effectiveWardrobe(now = new Date(), w: IWardrobeSettings = loadWardrobe()): IWardrobe {
     const outfit: IWardrobe = {
         hat: w.hat,
         glasses: w.glasses,

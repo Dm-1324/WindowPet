@@ -53,15 +53,15 @@ jobs:
 
                       **Install:** download `WindowPet_*_x64-setup.exe` below and run it (no admin needed).
                       Windows may say "Windows protected your PC" because the app isn't code-signed:
-                      click **More info → Run anyway**. Then open WindowPet → Pet Shop → add **My Avatar**,
-                      and turn on Settings → Auto start-up.
+                      click **More info → Run anyway**. Your pet appears on the taskbar right away;
+                      turn on Settings → Auto start-up to keep it around.
 
                       **Shortcuts:** Ctrl+Alt+S sleep · W work · G game · M movie · D dance · H hi ·
                       F follow cursor · P focus timer · A angry · E emotional · T attention · C snack · X hide · N normal
 
                       **Cheer it up:** rub the cursor over it to pet it, or give it a snack.
 
-                      **Already installed?** From v1.2.0 on, WindowPet updates itself: it tells you when a
-                      new version is out, and Settings asks to install it.
+                      **Already installed?** WindowPet updates itself (from v1.2.0 on): your pet tells you when a
+                      new version is out, and About → Check for updates installs it.
                   releaseDraft: false
                   prerelease: false

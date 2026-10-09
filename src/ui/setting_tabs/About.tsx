@@ -1,115 +1,81 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import { Anchor, Avatar, Button, Flex, Loader, Text } from "@mantine/core";
+import { memo, useEffect, useState } from "react";
+import { Anchor, Box, Button, Group, Image, Loader, Stack, Text } from "@mantine/core";
+import { IconBrandGithub, IconBug, IconCode, IconHeart, IconRefresh } from "@tabler/icons-react";
 import { open } from "@tauri-apps/api/shell";
-import { ButtonVariant } from "../../utils";
-import { getVersion } from '@tauri-apps/api/app';
-import { useTranslation } from "react-i18next";
+import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdate } from "../../utils/update";
+import classes from "./About.module.css";
+
+const REPO = "https://github.com/Dm-1324/WindowPet";
+
+type UpdateState = "checking" | "latest" | "available" | "offline";
+
+const LINKS = [
+    { icon: IconBrandGithub, title: "Made by", label: "Dhruv · @Dm-1324", url: "https://github.com/Dm-1324" },
+    { icon: IconCode, title: "Source code", label: "github.com/Dm-1324/WindowPet", url: REPO },
+    { icon: IconBug, title: "Report a problem", label: "Open an issue on GitHub", url: `${REPO}/issues` },
+    { icon: IconHeart, title: "Built on", label: "WindowPet by Seakmeng (MIT licence)", url: "https://github.com/SeakMengs/WindowPet" },
+];
 
 function About() {
-    const { t } = useTranslation();
-    const [appVersion, setAppVersion] = useState('.....');
-    const [checkingForUpdate, setCheckingForUpdate] = useState(false);
-    const [isLatestVersion, setIsLatestVersion] = useState(false);
+    const [version, setVersion] = useState("…");
+    const [update, setUpdate] = useState<UpdateState>("checking");
 
-    const checkUpdate = async () => {
-        if (!checkingForUpdate) {
-            setCheckingForUpdate(true);
-            const hasUpdate = await checkForUpdate()
-            hasUpdate ? setIsLatestVersion(false) : setIsLatestVersion(true);
-            setCheckingForUpdate(false);
-        }
-    }
+    const check = async (prompt = true) => {
+        setUpdate("checking");
+        // checks this app's own releases; on a button press a dialog offers to install a new one
+        const result = await checkForUpdate(prompt);
+        setUpdate(result === true ? "available" : result === false ? "latest" : "offline");
+    };
 
     useEffect(() => {
-        getVersion().then((version) => {
-            setAppVersion(version);
-        });
-        checkUpdate();
-
-        return () => {
-            setAppVersion('.....');
-            setCheckingForUpdate(false);
-            setIsLatestVersion(false);
-        }
+        getVersion().then(setVersion).catch(() => {});
+        // the settings window already offered the update when it opened; just show the status
+        check(false);
     }, []);
 
-    const titleAndLinks = useMemo(() => ([
-        {
-            title: t("Developed by:"),
-            link: {
-                url: "https://github.com/SeakMengs",
-                label: t("@Seakmeng"),
-            },
-        },
-        {
-            title: t("Source code:"),
-            link: {
-                url: "https://github.com/SeakMengs/WindowPet",
-                label: t("@SeakMengs/WindowPet"),
-            },
-        },
-        {
-            title: t("Report a bug:"),
-            link: {
-                url: "https://github.com/SeakMengs/WindowPet/issues",
-                label: t("@SeakMengs/WindowPet/issues"),
-            },
-        },
-        {
-            title: t("Community: "),
-            link: {
-                url: "https://github.com/SeakMengs/WindowPet/discussions",
-                label: t("@SeakMengs/WindowPet/discussions"),
-            },
-        },
-        {
-            title: t("Buy me a coffee:"),
-            link: {
-                url: "https://www.buymeacoffee.com/seakmeng",
-                label: t("BuyMeACoffee/@Seakmeng"),
-            },
-        },
-    ]), []);
-
     return (
-        <Flex align={"center"} justify={"center"} direction={"column"} gap={"md"}>
-            <Avatar
-                src="/media/icon.png"
-                alt="WindowPet"
-                w={128}
-                h={128}
-            />
-            <Text fw={700}>WindowPet</Text>
-            <Text display={"flex"}>{t("Version", { version: appVersion })}
-                <Anchor mx={"xs"} onClick={() => open(`https://github.com/Dm-1324/WindowPet/releases/tag/v${appVersion}`)}>{t("(release note)")}</Anchor>
-            </Text>
-            {
-                checkingForUpdate &&
-                <Flex align={"center"} justify={"center"} gap={"xs"}>
-                    <Loader />
-                    <Text color="dimmed">{t("Checking for updates")}</Text>
-                </Flex>
-            }
-            {
-                isLatestVersion ?
-                    !checkingForUpdate && <Text color="dimmed">{t("You have the latest version", { lastCheck: '' })}</Text>
-                    :
-                    !checkingForUpdate && <Text color="dimmed">{t("There is a new version available", { lastCheck: '' })}</Text>
-            }
-            <Button variant={ButtonVariant} onClick={checkUpdate}>
-                {t("Check for updates")}
-            </Button>
-            {
-                titleAndLinks.map((item, index) => (
-                    <Text key={`titleAndLinks-${index}`} display={"flex"}>
-                        {item.title}
-                        <Anchor mx={"xs"} onClick={() => open(item.link.url)}>{item.link.label}</Anchor>
-                    </Text>
-                ))
-            }
-        </Flex>
-    )
+        <Stack gap="xl">
+            <Group gap="lg" wrap="nowrap" className={classes.hero}>
+                <Image src="/media/my_avatar.png" alt="" w={84} h={102} fit="contain" />
+                <div>
+                    <Text className={classes.name}>WindowPet</Text>
+                    <Text c="dimmed" fz="sm">Custom Avatar Edition · version {version}</Text>
+                    <Group gap="sm" mt="sm">
+                        <Button size="xs" variant="light" leftSection={update === "checking" ? <Loader size={12} /> : <IconRefresh size="0.9rem" />}
+                            onClick={() => check()} disabled={update === "checking"}>
+                            Check for updates
+                        </Button>
+                        <Text fz="sm" c={update === "available" ? "leaf" : "dimmed"} fw={update === "available" ? 700 : 400}>
+                            {update === "checking" && "Checking…"}
+                            {update === "latest" && "You're on the latest version 🎉"}
+                            {update === "available" && "A new version is ready to install ✨"}
+                            {update === "offline" && "Couldn't reach GitHub. Check your connection and try again."}
+                        </Text>
+                    </Group>
+                    <Anchor fz="xs" mt={6} display="inline-block" onClick={() => open(`${REPO}/releases/tag/v${version}`)}>
+                        What's new in this version
+                    </Anchor>
+                </div>
+            </Group>
+
+            <Stack gap={0}>
+                {LINKS.map(({ icon: Icon, title, label, url }) => (
+                    <Group key={title} className={classes.row} wrap="nowrap" gap="md">
+                        <Icon size="1.1rem" stroke={1.8} className={classes.rowIcon} />
+                        <Text w={130} fz="sm" c="dimmed">{title}</Text>
+                        <Anchor fz="sm" fw={600} onClick={() => open(url)}>{label}</Anchor>
+                    </Group>
+                ))}
+            </Stack>
+
+            <Box>
+                <Text fz="xs" c="dimmed">
+                    Updates come from this app's own GitHub releases and are signed, so only versions published here can install.
+                </Text>
+            </Box>
+        </Stack>
+    );
 }
 
 export default memo(About);

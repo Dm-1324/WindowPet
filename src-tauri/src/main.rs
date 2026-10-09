@@ -60,6 +60,7 @@ fn build_app() {
             system::set_lock_screen,
             system::get_weather,
             tray::toggle_pets_visibility,
+            tray::set_pets_visible,
             utils::reopen_main_window,
         ])
         .build(tauri::generate_context!())

@@ -9,18 +9,21 @@ import Updater from '../ui/pop_up/Updater';
 import { info, error } from "tauri-plugin-log-api";
 import { ButtonVariant } from '.';
 import i18next from 'i18next';
+import { notifications } from '@mantine/notifications';
 
 // Updates come from this fork's own GitHub releases (Dm-1324/WindowPet), signed
 // with its own key; see tauri.conf.json -> updater.
 const UPDATES_ENABLED = true;
 
-export const checkForUpdate = async () => {
+// prompt: false only checks (used for the status line in About); true also offers to install
+export const checkForUpdate = async (prompt = true) => {
   if (!UPDATES_ENABLED) return false;
   info('Checking for update');
   try {
     const { shouldUpdate, manifest } = await checkUpdate()
 
-    if (shouldUpdate) {
+    if (shouldUpdate && prompt) {
+      modals.close('check-for-update');
       modals.openConfirmModal({
         modalId: 'check-for-update',
         centered: true,
@@ -37,6 +40,8 @@ export const checkForUpdate = async () => {
     return shouldUpdate;
   } catch (err) {
     error(err as string);
+    // couldn't reach GitHub (offline, …): neither "up to date" nor "update available"
+    return null;
   }
 }
 
@@ -53,6 +58,11 @@ export const update = async () => {
     await relaunch()
   } catch (err) {
     error(err as string);
+    notifications.show({
+      color: 'red',
+      title: i18next.t("Couldn't install the update"),
+      message: i18next.t('Check your internet connection and try again from About → Check for updates.'),
+    });
   } finally {
     unlisten()
   }

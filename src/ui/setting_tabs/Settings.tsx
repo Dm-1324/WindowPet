@@ -26,31 +26,31 @@ function Settings() {
     const settingSwitches: ISettingsContent[] = [
         {
             title: t("Auto start-up"),
-            description: t("Automatically open WindowPet every time u start the computer"),
+            description: t("Open WindowPet automatically when you sign in to Windows"),
             checked: allowAutoStartUp,
             dispatchType: DispatchType.SwitchAutoWindowStartUp,
         },
         {
-            title: t("Pet above taskbar"),
-            description: t("Make the pet float above taskbar (For Window User)"),
+            title: t("Walk above the taskbar"),
+            description: t("Your pet stands on top of the taskbar instead of the bottom edge of the screen"),
             checked: allowPetAboveTaskbar,
             dispatchType: DispatchType.SwitchPetAboveTaskbar,
         },
         {
             title: t("Pet interactions"),
-            description: t("If allow pet interaction turn on, user will be able to drag and move the pet around their window"),
+            description: t("Pick your pet up with the mouse and drop it anywhere"),
             checked: allowPetInteraction,
             dispatchType: DispatchType.SwitchAllowPetInteraction,
         },
         {
-            title: t("Allow pet climb"),
-            description: t("If allow pet climb turn on, pet will be able to climb on the left, right, and top of the window"),
+            title: t("Climbing"),
+            description: t("Your pet can climb the sides of the screen and hang from the top"),
             checked: allowPetClimbing,
             dispatchType: DispatchType.SwitchAllowPetClimbing,
         },
         {
-            title: t("Override pet scale"),
-            description: t("Allow the program to adjust all pet sizes by a fixed amount determined by your preferences, ignoring any individual pet scales"),
+            title: t("Custom size"),
+            description: t("Make your pet bigger or smaller with the slider"),
             checked: allowOverridePetScale,
             dispatchType: DispatchType.OverridePetScale,
             component: allowOverridePetScale &&
@@ -70,7 +70,7 @@ function Settings() {
     return (
         <>
             {SettingSwitches}
-            <SettingButton title={t("App Config Path")} description={t(`The location path of where the app store your config such as settings, pets, etc`)} btnLabel={t("Open")} btnFunction={openConfigFolder} />
+            <SettingButton title={t("Settings folder")} description={t("Where WindowPet keeps your settings and logs")} btnLabel={t("Open folder")} btnFunction={openConfigFolder} />
             <Select
                 leftSection={<IconLanguage />}
                 allowDeselect={false}
