@@ -37,6 +37,14 @@
 - Naps when you're away from the keyboard and says "Welcome back! You were away 25 min"
 - Follows your cursor around the screen
 
+**Reacts to your PC**
+- 🪫 Sleepy and yawning on low battery (warns at 20 %, 10 %, 5 %), ⚡ happy when you plug in, "fully charged!" at 100 %
+- 🥵 Sweats and fans itself when the CPU or RAM is maxed out, "phew" when it cools down
+- 📡 Holds an unplugged cable when the internet drops, celebrates when it's back
+- 🔒 Guards your laptop when you lock it, "You're back! I kept your laptop safe" when you unlock
+- ☔ Dresses for the weather in your city: umbrella in the rain, shades in the sun, a beanie when it's cold
+- 🖼️ Lock screen picture: your pet in its outfit with lines like *"Laptop's locked 🔒 Unlock to chat with me!"* (starry night version after 10 pm)
+
 **Actually useful**
 - 🍅 Focus timer (Pomodoro) with a countdown above its head and break reminders
 - Wellbeing nudges: drink water, stretch, eye breaks (paused while you're away or focusing)

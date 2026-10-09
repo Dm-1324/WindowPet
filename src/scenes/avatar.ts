@@ -79,6 +79,8 @@ export interface IWardrobe {
     // shirt colour ("none" or a hex colour) and print
     shirt?: string;
     shirtPattern?: "plain" | "stripes" | "star" | "heart";
+    // held over the head (rainy weather)
+    umbrella?: boolean;
 }
 
 export interface IAvatarOptions {
@@ -100,8 +102,8 @@ export interface IAvatarOptions {
 // ---------- poses ----------
 
 type Anchor = "ground" | "center" | "wall" | "ceiling" | "bed";
-type Eyes = "open" | "closed" | "happy" | "sleep" | "angry" | "sad" | "side" | "up";
-type Prop = "laptop" | "controller" | "bed" | "popcorn";
+type Eyes = "open" | "closed" | "happy" | "sleep" | "angry" | "sad" | "side" | "up" | "tired";
+type Prop = "laptop" | "controller" | "bed" | "popcorn" | "fan" | "cable";
 
 interface ILimbPose {
     raise?: number; // radians, positive lifts the limb up/outwards
@@ -336,6 +338,47 @@ export const AVATAR_STATE_DEFS: IAvatarStateDef[] = [
                 },
             };
         },
+    },
+    {
+        // low battery: droopy, slow, the occasional big yawn
+        state: "tired", frames: 24, frameRate: 6, anchor: "ground",
+        pose: (t, i) => {
+            const yawn = i >= 12 && i <= 16;
+            return {
+                sy: 0.92 + 0.012 * sin(TAU * t) + (yawn ? 0.04 : 0),
+                sx: 1.04,
+                rot: 0.05 * sin(TAU * t),
+                eyes: yawn ? "closed" : "tired",
+                limbs: yawn
+                    ? { armL: { raise: 1.6 }, armR: { raise: 1.6 } } // stretch
+                    : { armL: { raise: -0.35 }, armR: { raise: -0.35 } },
+            };
+        },
+    },
+    {
+        // CPU / RAM maxed out: hot, sweaty, fanning itself
+        state: "hot", frames: 16, frameRate: 12, anchor: "ground",
+        pose: (t, i) => ({
+            sy: 0.96 + 0.01 * sin(2 * TAU * t), sx: 1.03,
+            rot: 0.02 * sin(TAU * t),
+            eyes: i % 8 === 7 ? "closed" : "tired",
+            tint: "255,90,60,0.14",
+            limbs: { armL: { raise: -0.2 }, armR: { raise: 0.9 + 0.25 * sin(4 * TAU * t) } },
+            prop: "fan",
+            propPhase: t,
+        }),
+    },
+    {
+        // no internet: holding the unplugged cable, puzzled
+        state: "offline", frames: 24, frameRate: 6, anchor: "ground",
+        pose: (t, i) => ({
+            sy: 0.95, sx: 1.02,
+            rot: i >= 12 && i < 18 ? -0.08 : 0.03 * sin(TAU * t), // tilts its head, confused
+            eyes: i === 20 ? "closed" : i >= 12 && i < 18 ? "sad" : "side",
+            limbs: { armL: { raise: i >= 12 && i < 18 ? 0.9 : -0.2 }, armR: { raise: 0.55 } },
+            prop: "cable",
+            propPhase: t,
+        }),
     },
     {
         // petted / cheered up
@@ -648,6 +691,29 @@ function eyeVariant(base: HTMLCanvasElement, opts: IAvatarOptions, kind: Eyes): 
             ctx.beginPath();
             ctx.moveTo(e.x - inner * e.rx * 1.1, e.y - e.ry * 1.55);
             ctx.lineTo(e.x + inner * e.rx * 1.0, e.y - e.ry * 1.0);
+            ctx.stroke();
+        }
+        return c;
+    }
+
+    if (kind === "tired") {
+        // heavy eyelids covering the top half, with a droopy lid line
+        for (const e of opts.eyes!) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(e.x - e.rx * 1.4, e.y - e.ry * 1.4, e.rx * 2.8, e.ry * 1.25);
+            ctx.clip();
+            ctx.fillStyle = opts.eyelidColor ?? sampleAround(base, e);
+            ctx.beginPath();
+            ctx.ellipse(e.x, e.y, e.rx * 1.18, e.ry * 1.15, 0, 0, TAU);
+            ctx.fill();
+            ctx.restore();
+            ctx.strokeStyle = line;
+            ctx.lineWidth = Math.max(2, Math.min(e.rx, e.ry) * 0.38);
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(e.x - e.rx * 1.05, e.y - e.ry * 0.12);
+            ctx.lineTo(e.x + e.rx * 1.05, e.y - e.ry * 0.12);
             ctx.stroke();
         }
         return c;
@@ -1230,6 +1296,100 @@ function drawGlasses(ctx: CanvasRenderingContext2D, kind: string, eyes: { x: num
     ctx.stroke();
 }
 
+function drawUmbrella(ctx: CanvasRenderingContext2D, cx: number, top: number, hw: number, h: number, w: number) {
+    // fits in the frame's headroom (~0.3 of the height above the head)
+    const rx = Math.max(hw * 0.8, w * 0.55), ry = h * 0.27;
+    const ux = cx + hw * 0.1, uy = top + h * 0.02;
+    // handle down to the hand, with a J hook
+    ctx.strokeStyle = "#5d4037";
+    ctx.lineWidth = Math.max(2, h * 0.025);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(ux, uy);
+    ctx.lineTo(ux + w * 0.2, top + h * 0.5);
+    ctx.arc(ux + w * 0.2 + h * 0.04, top + h * 0.5, h * 0.04, Math.PI, 0, true);
+    ctx.stroke();
+    // canopy: four coloured panels, then little scallops along the rim
+    const colors = ["#ff6b9a", "#ffd54f", "#4fc3f7", "#81c784"];
+    for (let k = 0; k < 4; k++) {
+        ctx.fillStyle = colors[k];
+        ctx.beginPath();
+        ctx.moveTo(ux, uy);
+        ctx.ellipse(ux, uy, rx, ry, 0, Math.PI + (k * Math.PI) / 4, Math.PI + ((k + 1) * Math.PI) / 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(ux - rx + rx / 4 + (k * rx) / 2, uy, rx / 4, ry * 0.18, 0, 0, Math.PI);
+        ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(0,0,0,0.22)";
+    ctx.lineWidth = Math.max(1, h * 0.01);
+    ctx.beginPath();
+    ctx.ellipse(ux, uy, rx, ry, 0, Math.PI, TAU);
+    ctx.stroke();
+    ctx.fillStyle = "#5d4037";
+    ctx.beginPath();
+    ctx.arc(ux, uy - ry, h * 0.022, 0, TAU);
+    ctx.fill();
+}
+
+// a folding paper fan held at (x, y), swinging with `phase`
+function drawFan(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, phase: number) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.5 + 0.45 * sin(4 * TAU * phase));
+    const folds = 7;
+    for (let k = 0; k < folds; k++) {
+        const a0 = -Math.PI * 0.85 + (k * Math.PI * 0.7) / folds;
+        const a1 = a0 + (Math.PI * 0.7) / folds;
+        ctx.fillStyle = k % 2 ? "#ffe0ec" : "#ff8fb1";
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, size, a0, a1);
+        ctx.closePath();
+        ctx.fill();
+    }
+    ctx.strokeStyle = "#c2185b";
+    ctx.lineWidth = Math.max(1, size * 0.04);
+    ctx.beginPath();
+    ctx.arc(0, 0, size, -Math.PI * 0.85, -Math.PI * 0.15);
+    ctx.stroke();
+    ctx.fillStyle = "#6d4c41";
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.1, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+}
+
+// an unplugged network cable: plug in the hand, cable trailing to the ground
+function drawCable(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, phase: number) {
+    const sway = h * 0.02 * sin(TAU * phase);
+    ctx.strokeStyle = "#455a64";
+    ctx.lineWidth = Math.max(2, h * 0.025);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x, y + h * 0.04);
+    ctx.bezierCurveTo(x + h * 0.25 + sway, y + h * 0.15, x + h * 0.05, -h * 0.05, x + h * 0.45, -h * 0.01);
+    ctx.lineTo(x + h * 0.8, -h * 0.01);
+    ctx.stroke();
+    // plug head with two prongs, pointing up
+    ctx.fillStyle = "#607d8b";
+    roundRect(ctx, x - h * 0.045, y - h * 0.05, h * 0.09, h * 0.09, h * 0.015);
+    ctx.fill();
+    ctx.fillStyle = "#cfd8dc";
+    ctx.fillRect(x - h * 0.03, y - h * 0.09, h * 0.015, h * 0.04);
+    ctx.fillRect(x + h * 0.015, y - h * 0.09, h * 0.015, h * 0.04);
+    // little "spark-less" broken symbol
+    ctx.strokeStyle = "#e53935";
+    ctx.lineWidth = Math.max(1.5, h * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(x + h * 0.08, y - h * 0.12);
+    ctx.lineTo(x + h * 0.14, y - h * 0.06);
+    ctx.moveTo(x + h * 0.14, y - h * 0.12);
+    ctx.lineTo(x + h * 0.08, y - h * 0.06);
+    ctx.stroke();
+}
+
 function drawCookie(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
     ctx.fillStyle = "#d9a05b";
     ctx.strokeStyle = "#8d5a2b";
@@ -1277,8 +1437,12 @@ export function buildAvatarSheet(
     source: Img,
     options: IAvatarOptions = {},
     pixelScale: number = 1,
-    partImages: IPartImage[] = []
+    partImages: IPartImage[] = [],
+    // build only these states (e.g. for a single still); the default is all of them
+    only?: string[]
 ): IAvatarSheet {
+    const defs = only ? AVATAR_STATE_DEFS.filter((d) => only.includes(d.state)) : AVATAR_STATE_DEFS;
+    const total = defs.reduce((sum, d) => sum + d.frames, 0);
     // 1. clean up the source and find the character's bounds (body + parts)
     const base = copyOf(source);
     const parts = partImages.map((p) => ({ ...p, canvas: copyOf(p.image) }));
@@ -1303,8 +1467,8 @@ export function buildAvatarSheet(
         h = Math.round((h * maxW) / w);
         w = Math.round(maxW);
     }
-    const columns = Math.ceil(Math.sqrt(TOTAL_FRAMES));
-    const rows = Math.ceil(TOTAL_FRAMES / columns);
+    const columns = Math.ceil(Math.sqrt(total));
+    const rows = Math.ceil(total / columns);
     let frameSize = Math.ceil(Math.max(h * 1.32, w + h * 0.45));
     const maxFrame = Math.floor(MAX_TEXTURE_SIZE / Math.max(columns, rows));
     if (frameSize > maxFrame) {
@@ -1329,7 +1493,7 @@ export function buildAvatarSheet(
 
     // 3. body in every eye state, cropped and scaled the same way
     const body: { [e in Eyes]: HTMLCanvasElement } = {} as any;
-    for (const kind of ["open", "closed", "happy", "sleep", "angry", "sad", "side", "up"] as Eyes[]) {
+    for (const kind of ["open", "closed", "happy", "sleep", "angry", "sad", "side", "up", "tired"] as Eyes[]) {
         let variant = base;
         try {
             variant = eyeVariant(base, options, kind);
@@ -1350,6 +1514,7 @@ export function buildAvatarSheet(
         offY: p.part.pivotY * k,
     }));
 
+    let anchor: Anchor = "ground"; // anchor of the frame being drawn
     const drawCharacter = (ctx: CanvasRenderingContext2D, pose: IPose) => {
         const drawLimb = (l: (typeof limbs)[number]) => {
             const lp = pose.limbs?.[l.part.name] ?? {};
@@ -1377,7 +1542,12 @@ export function buildAvatarSheet(
                 drawGlasses(ctx, wardrobe.glasses, eyes);
             }
             if (wardrobe.hat && wardrobe.hat !== "none") drawHat(ctx, wardrobe.hat, top.x, top.y, hw);
+            // umbrella only when upright (not in bed, on walls or hanging from the ceiling)
+            if (wardrobe.umbrella && (anchor === "ground" || anchor === "center")) drawUmbrella(ctx, top.x, top.y, hw, h, w);
         }
+
+        if (pose.prop === "fan") drawFan(ctx, w * 0.42, -h * 0.5, h * 0.24, pose.propPhase ?? 0);
+        if (pose.prop === "cable") drawCable(ctx, w * 0.48, -h * 0.42, h, pose.propPhase ?? 0);
 
         if (pose.snack !== undefined && pose.snack > 0) {
             const eyes = options.eyes ?? [];
@@ -1396,7 +1566,8 @@ export function buildAvatarSheet(
     const ctx = context(sheet);
     let sleepHead = { x: 0.25, y: 0.6 };
     let index = 0;
-    for (const def of AVATAR_STATE_DEFS) {
+    for (const def of defs) {
+        anchor = def.anchor;
         for (let i = 0; i < def.frames; i++, index++) {
             const fx = (index % columns) * frameSize;
             const fy = Math.floor(index / columns) * frameSize;
@@ -1493,6 +1664,24 @@ export function buildAvatarSheet(
         headTopRatio: (frameSize - margin - h) / frameSize,
         sleepHead,
     };
+}
+
+// one frame of one state as its own canvas, at any size (e.g. for the lock screen picture)
+export function renderAvatarStill(
+    source: Img,
+    options: IAvatarOptions,
+    partImages: IPartImage[],
+    state: string,
+    frame: number,
+    height: number
+): { canvas: HTMLCanvasElement; headTopRatio: number; sleepHead: { x: number; y: number } } {
+    const sheet = buildAvatarSheet(source, { ...options, height }, 1, partImages, [state]);
+    const def = AVATAR_STATE_DEFS.find((d) => d.state === state);
+    const i = def ? frame % def.frames : 0;
+    const F = sheet.frameSize;
+    const out = makeCanvas(F, F);
+    context(out).drawImage(sheet.canvas, (i % sheet.columns) * F, Math.floor(i / sheet.columns) * F, F, F, 0, 0, F, F);
+    return { canvas: out, headTopRatio: sheet.headTopRatio, sleepHead: sheet.sleepHead };
 }
 
 // ---------- Phaser glue ----------

@@ -18,6 +18,7 @@ import { ConfigManager, InputManager } from "./manager";
 import { avatarMeta, IAvatarPersonality } from "./avatar";
 import { isRegistered, register, unregister } from "@tauri-apps/api/globalShortcut";
 import { invoke } from "@tauri-apps/api/tauri";
+import { applyLockScreen } from "../utils/lockscreen";
 import { createAvatarTexture, AVATAR_STATE_DEFS } from "./avatar";
 import {
     appName,
@@ -35,7 +36,11 @@ import {
     ISystemStatus,
     loadCompanion,
     loadReminders,
+    loadWeather,
     matchApp,
+    saveWeather,
+    weatherKind,
+    IWeather,
     saveCompanion,
     saveReminders,
     WARDROBE_KEY,
@@ -129,6 +134,9 @@ export default class Pets extends Phaser.Scene {
         "lookup",
         "happy",
         "eat",
+        "tired",
+        "hot",
+        "offline",
     ];
     private readonly FRAME_RATE: number = 9;
     private readonly UPDATE_DELAY: number = 1000 / this.FRAME_RATE;
@@ -157,6 +165,7 @@ export default class Pets extends Phaser.Scene {
         durations: {
             sit: [8, 20], sleep: [25, 60], laptop: [15, 40], game: [15, 40], movie: [30, 90],
             angry: [5, 8], sad: [8, 14], attention: [8, 14],
+            tired: [15, 30], hot: [10, 16], offline: [3600, 3600],
         },
         nightSleepBoost: 5,
         attentionAfter: 8,
@@ -207,6 +216,22 @@ export default class Pets extends Phaser.Scene {
     // feature switches from Settings → Companion
     private companion: ICompanionSettings = loadCompanion();
     private musicPlaying: boolean = false;
+    // reacting to the PC itself
+    private pc = {
+        locked: false,
+        charging: null as boolean | null,
+        warned: new Set<number>(), // battery levels already warned about (this discharge)
+        fullSaid: false,
+        hotPolls: 0,
+        hot: false,
+        lastHotAt: -Infinity,
+        offlinePolls: 0,
+        offline: false,
+        lastTiredAt: -Infinity,
+    };
+    private weatherKindNow: string | null = loadWeather() ? weatherKind(loadWeather()!) : null;
+    private lastLockScreenAt: number = 0;
+    private unlockedAt: number = -Infinity;
     private onStorage = (e: StorageEvent) => {
         if (e.key === WARDROBE_KEY) this.wardrobeChanged();
         if (e.key === COMPANION_KEY) this.companionChanged();
@@ -246,6 +271,18 @@ export default class Pets extends Phaser.Scene {
         curedSad: ["Thank you! I feel so much better 🥰", "Yay, I'm happy again! 💖", "You're the best! 💖"],
         petted: ["Hehe~ 💕", "That tickles! 😆", "Purr~ 💕", "More pets please! 🥰"],
         sleepPetted: ["*happy snore* 💤", "Mmm… 💕💤"],
+        locked: ["🔒 Locked! I'll guard your laptop 🛡️", "Locked 🔒 Wake me when you're back 💤"],
+        unlocked: ["You're back! 🔓 I kept your laptop safe 🛡️", "Unlocked! 🔓 Missed you 💖", "Welcome back! 🔓 Nobody got past me 😤🛡️"],
+        charging: ["Ahh, charging! ⚡ Thank you!", "Yum, electricity! ⚡😋", "Charging up! ⚡🔋"],
+        unplugged: ["Unplugged! Running on battery 🔋", "Off the charger, let's go! 🔋"],
+        fullBattery: ["Fully charged! 💯🔋 You can unplug me", "100% and ready! 💯⚡"],
+        lowBattery: ["Battery's at {n}%… I'm getting sleepy 🪫", "{n}% battery… *yawn* 🪫"],
+        criticalBattery: ["Battery {n}%! Please plug me in 🔌", "Only {n}% left! Charger please 🔌😵"],
+        hotCpu: ["Phew, your PC is working hard 🥵 (CPU {n}%)", "So hot in here… CPU at {n}% 🥵"],
+        hotRam: ["Memory's almost full 🥵 ({n}% RAM)", "My brain is full! {n}% RAM 🥵"],
+        cooled: ["Phew, cooled down 😮‍💨", "Ahh, much better 😌"],
+        offline: ["No internet… 😢 I'll wait here", "Uh oh, we're offline 📡❌", "Who unplugged the internet? 🔌😢"],
+        online: ["We're back online! 🌐🎉", "Internet's back! 🌐✨"],
         yum: ["Yum! 😋", "Nom nom nom 🍪", "Delicious! 😋", "Thanks for the snack! 💕"],
         foodSpotted: ["Ooh, a snack! 😮", "Food?! 🤤", "Is that for me?! 😍"],
         song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
@@ -275,8 +312,13 @@ export default class Pets extends Phaser.Scene {
         sad: { texts: ["💧"], every: [900, 1400], colors: ["#5aa9ff"] },
         attention: { texts: ["❗", "👀", "💖", "✨", "❓"], every: [450, 750], colors: ["#ff6b9a", "#ffb02e", "#5aa9ff"] },
     };
+    private readonly PC_PARTICLES: { [state: string]: { texts: string[]; every: [number, number]; colors: string[] } } = {
+        tired: { texts: ["🪫", "z", "…"], every: [1800, 2800], colors: ["#7a6cc9"] },
+        hot: { texts: ["💦", "💦", "🔥"], every: [600, 1000], colors: ["#5aa9ff"] },
+        offline: { texts: ["❓", "📡", "…"], every: [1500, 2500], colors: ["#8a8a8a"] },
+    };
     // particles that drop (tears) instead of floating up
-    private readonly FALLING_PARTICLES: string[] = ["sad"];
+    private readonly FALLING_PARTICLES: string[] = ["sad", "hot"];
 
     constructor() {
         super({ key: "Pets" });
@@ -340,6 +382,11 @@ export default class Pets extends Phaser.Scene {
 
         // companion features: what the computer is doing, outfits, reminders
         this.time.addEvent({ delay: 2000, loop: true, callback: () => this.pollSystem() });
+        // weather every 5 min (fetches at most every 20), lock screen picture checks every 10 min
+        this.time.delayedCall(3000, () => this.refreshWeather());
+        this.time.addEvent({ delay: 5 * 60000, loop: true, callback: () => this.refreshWeather() });
+        this.time.delayedCall(20000, () => this.refreshLockScreen());
+        this.time.addEvent({ delay: 10 * 60000, loop: true, callback: () => this.refreshLockScreen() });
         window.addEventListener("storage", this.onStorage);
         this.events.once("destroy", () => window.removeEventListener("storage", this.onStorage));
         const nudges = this.personality().nudges;
@@ -1573,7 +1620,7 @@ export default class Pets extends Phaser.Scene {
                 }
             }
 
-            const fx = this.PARTICLES[state];
+            const fx = this.PARTICLES[state] ?? this.PC_PARTICLES[state];
             if (fx && time >= (pet.nextParticleAt ?? 0)) {
                 pet.nextParticleAt = time + Phaser.Math.Between(fx.every[0], fx.every[1]);
                 this.spawnParticle(pet, state, fx);
@@ -1827,8 +1874,13 @@ export default class Pets extends Phaser.Scene {
         const p = this.personality();
         const now = this.time.now;
 
+        // ---- locked / unlocked: everything else waits while the lock screen is up
+        if (this.companion.pcReactions && this.lockReaction(status)) return;
+
         // ---- away detection
-        const away = this.companion.awayDetection && p.awayAfter > 0 && status.idle_ms >= p.awayAfter * 60000;
+        // (a minute's grace after unlocking: typing the PIN may not count as input)
+        const away =
+            this.companion.awayDetection && p.awayAfter > 0 && status.idle_ms >= p.awayAfter * 60000 && now - this.unlockedAt > 60000;
         this.forEachAvatar((pet) => {
             if (away && !pet.awayMode && !(pet.mode && !pet.awayMode) && this.focus.phase !== "work") {
                 if (pet.activity) this.endActivity(pet);
@@ -1849,6 +1901,9 @@ export default class Pets extends Phaser.Scene {
             }
         });
         if (away) return;
+
+        // ---- battery, CPU / RAM, internet
+        if (this.companion.pcReactions) this.pcReactions(status);
 
         // ---- app awareness: join in with what you're doing
         // (while you use WindowPet itself, remember the app you were in before)
@@ -1967,6 +2022,188 @@ export default class Pets extends Phaser.Scene {
         }
     }
 
+    // true while locked (nothing else should react)
+    lockReaction(status: ISystemStatus): boolean {
+        if (status.locked && !this.pc.locked) {
+            this.pc.locked = true;
+            this.awaySince = Date.now();
+            this.forEachAvatar((pet) => {
+                if (pet.activity) this.endActivity(pet);
+                this.startActivity(pet, "sleep", true, this.pick(this.LINES.locked));
+                pet.awayMode = true;
+            });
+            info("Companion: locked");
+            return true;
+        }
+        if (!status.locked && this.pc.locked) {
+            this.pc.locked = false;
+            this.unlockedAt = this.time.now;
+            const mins = Math.round((Date.now() - this.awaySince) / 60000);
+            this.forEachAvatar((pet) => {
+                pet.pendingActivity = undefined;
+                this.endActivity(pet);
+                this.switchState(pet, "stand");
+                const line = this.pick(this.LINES.unlocked);
+                this.showBubble(pet, mins >= 1 ? `${line}\nYou were away ${mins} min ☕` : line, 4000, this.IMPORTANT);
+                this.time.delayedCall(600, () => this.playReaction(pet, "greet"));
+                pet.lastGreetAt = this.time.now;
+            });
+            this.lastInteraction = this.time.now;
+            info("Companion: unlocked");
+            return false;
+        }
+        return status.locked;
+    }
+
+    pcReactions(status: ISystemStatus): void {
+        const now = this.time.now;
+        const say = (key: string, n: number, priority = this.NORMAL, duration = 4000) =>
+            this.forEachAvatar((pet) => this.showBubble(pet, this.pick(this.LINES[key]).replace("{n}", String(Math.round(n))), duration, priority));
+        // only interrupt things it chose by itself
+        const canMood = (pet: Pet) => !pet.mode && !pet.follow && this.canStartActivity(pet) && (!pet.activity || (!pet.autoActivity && !pet.mood));
+
+        // ---- battery (laptops only)
+        if (status.battery >= 0) {
+            if (this.pc.charging !== null && status.charging !== this.pc.charging) {
+                if (status.charging) {
+                    this.pc.warned.clear();
+                    say("charging", 0, this.IMPORTANT);
+                    this.forEachAvatar((pet) => {
+                        if (pet.activity === "tired") this.endActivity(pet);
+                        if (this.isOnGround(pet) && !pet.mode) this.playReaction(pet, "happy", true);
+                        for (let k = 0; k < 3; k++) {
+                            this.time.delayedCall(k * 250, () => this.spawnParticle(pet, "attention", { texts: ["⚡"], colors: ["#ffb02e"] }));
+                        }
+                    });
+                } else {
+                    this.pc.fullSaid = false;
+                    say("unplugged", 0, this.CASUAL);
+                }
+            }
+            this.pc.charging = status.charging;
+
+            if (status.charging && status.battery >= 100 && !this.pc.fullSaid) {
+                this.pc.fullSaid = true;
+                say("fullBattery", 100, this.CASUAL);
+            }
+            if (!status.charging) {
+                // warnings at 20, 10 and 5 %, once each
+                for (const level of [5, 10, 20]) {
+                    if (status.battery <= level && !this.pc.warned.has(level)) {
+                        [5, 10, 20].filter((l) => l >= level).forEach((l) => this.pc.warned.add(l));
+                        if (level <= 10) this.deliver(this.pick(this.LINES.criticalBattery).replace("{n}", String(status.battery)), 8000, true);
+                        else say("lowBattery", status.battery, this.NORMAL);
+                        break;
+                    }
+                }
+                // sleepy now and then while the battery is low
+                if (status.battery <= 20 && now - this.pc.lastTiredAt > 180000) {
+                    this.forEachAvatar((pet) => {
+                        if (!canMood(pet) || pet.activity) return;
+                        this.startActivity(pet, "tired", false, this.pick(this.LINES.lowBattery).replace("{n}", String(status.battery)));
+                        this.pc.lastTiredAt = now;
+                    });
+                }
+            }
+        }
+
+        // ---- CPU / RAM: hot after ~10 s of heavy load, cools down when it drops
+        const heavy = status.cpu >= 85 || status.memory >= 92;
+        this.pc.hotPolls = heavy ? this.pc.hotPolls + 1 : 0;
+        if (this.pc.hotPolls >= 5 && !this.pc.hot && now - this.pc.lastHotAt > 180000) {
+            this.pc.hot = true;
+            this.pc.lastHotAt = now;
+            const ram = status.memory >= 92 && status.cpu < 85;
+            this.forEachAvatar((pet) => {
+                if (!canMood(pet)) return;
+                if (pet.activity) this.endActivity(pet);
+                const line = this.pick(this.LINES[ram ? "hotRam" : "hotCpu"]).replace("{n}", String(Math.round(ram ? status.memory : status.cpu)));
+                this.startActivity(pet, "hot", false, line);
+            });
+        } else if (this.pc.hot && status.cpu < 60 && status.memory < 85) {
+            this.pc.hot = false;
+            this.forEachAvatar((pet) => {
+                if (pet.activity === "hot") this.endActivity(pet);
+                this.showBubble(pet, this.pick(this.LINES.cooled), this.BUBBLE_DURATION, this.CASUAL);
+            });
+        }
+
+        // ---- internet: offline after ~6 s without a connection
+        this.pc.offlinePolls = status.online ? 0 : this.pc.offlinePolls + 1;
+        if (this.pc.offlinePolls >= 3 && !this.pc.offline) {
+            this.pc.offline = true;
+            this.forEachAvatar((pet) => {
+                if (!canMood(pet)) {
+                    this.showBubble(pet, this.pick(this.LINES.offline), 4000);
+                    return;
+                }
+                if (pet.activity) this.endActivity(pet);
+                this.startActivity(pet, "offline", false, this.pick(this.LINES.offline));
+            });
+        } else if (status.online && this.pc.offline) {
+            this.pc.offline = false;
+            this.forEachAvatar((pet) => {
+                if (pet.activity === "offline") this.endActivity(pet);
+                this.showBubble(pet, this.pick(this.LINES.online), 3500, this.IMPORTANT);
+                if (this.isOnGround(pet) && !pet.mode) this.time.delayedCall(400, () => this.playReaction(pet, "dance", true));
+            });
+        }
+    }
+
+    // ---- weather (every 20 minutes, and when the city changes)
+    async refreshWeather(force: boolean = false): Promise<void> {
+        const settings = this.companion;
+        if (!settings.weather || !settings.weatherCity.trim()) {
+            if (this.weatherKindNow !== null) {
+                this.weatherKindNow = null;
+                this.wardrobeChanged(true);
+            }
+            return;
+        }
+        const cached = loadWeather();
+        if (!force && cached && Date.now() - (cached.at ?? 0) < 20 * 60000) return;
+        let w: IWeather;
+        try {
+            w = await invoke<IWeather>("get_weather", { city: settings.weatherCity });
+        } catch (err) {
+            error(`Weather: ${err}`);
+            return;
+        }
+        saveWeather(w);
+        const kind = weatherKind(w);
+        if (kind === this.weatherKindNow && !force) return;
+        const first = this.weatherKindNow === null;
+        this.weatherKindNow = kind;
+        this.wardrobeChanged(true);
+
+        const t = Math.round(w.temperature);
+        const lines: { [k: string]: string } = {
+            storm: `⛈️ Stormy in ${w.place}! Stay safe inside`,
+            rain: `☔ It's raining in ${w.place} — good thing I have my umbrella!`,
+            snow: `❄️ Snow in ${w.place}! ${t}°, brr…`,
+            cold: `🥶 Only ${t}° in ${w.place}… beanie time!`,
+            hot: `☀️ ${t}° and sunny in ${w.place} — sunglasses on 😎`,
+            sunny: `☀️ Lovely sunny day in ${w.place}! 😎`,
+            cloudy: `☁️ ${t}° and cloudy in ${w.place}`,
+        };
+        // cloudy is only worth mentioning the first time
+        if (kind === "cloudy" && !first) return;
+        this.forEachAvatar((pet) => this.showBubble(pet, lines[kind], 4500, this.NORMAL));
+    }
+
+    // ---- lock screen picture (every 3 hours when turned on)
+    async refreshLockScreen(): Promise<void> {
+        if (!this.companion.lockScreen) return;
+        if (Date.now() - this.lastLockScreenAt < 3 * 3600000) return;
+        this.lastLockScreenAt = Date.now();
+        try {
+            const result = await applyLockScreen();
+            info(`Lock screen: ${result.ok ? "updated" : result.message}`);
+        } catch (err) {
+            error(`Lock screen: ${err}`);
+        }
+    }
+
     // a pet says something important: hop to get noticed, then the message
     deliver(text: string, duration: number, urgent: boolean = false): void {
         this.forEachAvatar((pet) => {
@@ -2067,7 +2304,7 @@ export default class Pets extends Phaser.Scene {
     }
 
     // rebuild avatar sprite sheets with the new outfit and react to it
-    wardrobeChanged(): void {
+    wardrobeChanged(silent: boolean = false): void {
         const outfit = effectiveWardrobe();
         // Settings both saves and sends an event: only rebuild once per change
         if (JSON.stringify(outfit) === JSON.stringify(this.lastOutfit)) return;
@@ -2092,7 +2329,9 @@ export default class Pets extends Phaser.Scene {
 
         const item = describeNewItem(this.lastOutfit, outfit);
         this.lastOutfit = outfit;
-        if (!item) return;
+        // the lock screen picture shows the new outfit too
+        this.lastLockScreenAt = 0;
+        if (!item || silent) return;
         this.forEachAvatar((pet) => {
             this.showBubble(pet, this.pick(this.LINES.newOutfit).replace("{item}", item), 3500);
             if (this.isOnGround(pet) && !pet.mode) {
@@ -2122,6 +2361,19 @@ export default class Pets extends Phaser.Scene {
     companionChanged(): void {
         const before = this.companion;
         this.companion = loadCompanion();
+        if (before.weather !== this.companion.weather || before.weatherCity !== this.companion.weatherCity) {
+            saveWeather(null);
+            this.refreshWeather(true);
+        }
+        if (!before.lockScreen && this.companion.lockScreen) {
+            this.lastLockScreenAt = 0;
+            this.refreshLockScreen();
+        }
+        if (!this.companion.pcReactions) {
+            this.forEachAvatar((pet) => {
+                if (pet.activity === "tired" || pet.activity === "hot" || pet.activity === "offline") this.endActivity(pet);
+            });
+        }
         if (before.follow !== this.companion.follow) this.setFollow(this.companion.follow);
         if (!this.companion.appAwareness) {
             this.forEachAvatar((pet) => pet.autoActivity && this.endActivity(pet));

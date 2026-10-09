@@ -57,6 +57,8 @@ fn build_app() {
             cmd::get_mouse_position,
             cmd::open_folder,
             system::get_system_status,
+            system::set_lock_screen,
+            system::get_weather,
             utils::reopen_main_window,
         ])
         .build(tauri::generate_context!())

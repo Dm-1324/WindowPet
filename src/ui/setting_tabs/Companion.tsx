@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import { Badge, Code, Divider, Group, Paper, SegmentedControl, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
+import { Badge, Button, Code, Divider, Group, Image, Paper, SegmentedControl, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/tauri";
 import defaultPetConfig from "../../config/pet_config";
 import {
@@ -9,14 +9,18 @@ import {
     isMusicContext,
     isOwnApp,
     ISystemStatus,
+    IWeather,
     loadCompanion,
+    loadWeather,
     matchApp,
     saveCompanion,
+    saveWeather,
 } from "../../utils/companion";
+import { applyLockScreen, ILockScreenPicture, renderLockScreen } from "../../utils/lockscreen";
 import { emitUpdatePetsEvent } from "../../utils/event";
 import { DispatchType } from "../../types/IEvents";
 
-type SwitchKey = Exclude<keyof ICompanionSettings, "chattiness">;
+type SwitchKey = Exclude<keyof ICompanionSettings, "chattiness" | "weatherCity" | "weather" | "lockScreen">;
 
 const SWITCHES: { key: SwitchKey; title: string; description: string }[] = [
     { key: "follow", title: "Follow the cursor 🐾", description: "Walks after your mouse (also Ctrl+Alt+F)" },
@@ -26,7 +30,11 @@ const SWITCHES: { key: SwitchKey; title: string; description: string }[] = [
     { key: "music", title: "Dance to music 🎵", description: "Dances and announces songs when music is playing" },
     { key: "awayDetection", title: "Nap when you're away", description: "Sleeps when you're away from the keyboard, says welcome back when you return" },
     { key: "nudges", title: "Wellbeing nudges", description: "Reminds you to drink water, stretch and rest your eyes" },
+    { key: "pcReactions", title: "React to your PC 💻", description: "Sleepy on low battery, happy when charging, sweaty when the CPU is maxed, sad when the internet drops, guards your laptop when you lock it" },
 ];
+
+const WEATHER_ICONS: [number, string][] = [[95, "⛈️"], [80, "🌦️"], [71, "❄️"], [51, "🌧️"], [45, "🌫️"], [2, "⛅"], [0, "☀️"]];
+const weatherIcon = (code: number) => (WEATHER_ICONS.find(([c]) => code >= c) ?? [0, "🌡️"])[1];
 
 const ACTIVITY_NAMES: { [state: string]: string } = {
     laptop: "💻 coding / working",
@@ -78,6 +86,58 @@ function Companion() {
         };
     }, []);
 
+    // weather
+    const [city, setCity] = useState(settings.weatherCity);
+    const [weather, setWeather] = useState<IWeather | null>(loadWeather());
+    const [weatherError, setWeatherError] = useState<string | null>(null);
+    const [checking, setChecking] = useState(false);
+
+    const checkWeather = async (name: string) => {
+        setChecking(true);
+        setWeatherError(null);
+        try {
+            const w = await invoke<IWeather>("get_weather", { city: name });
+            setWeather(w);
+            saveWeather(w);
+            return true;
+        } catch (e) {
+            setWeatherError(String(e));
+            return false;
+        } finally {
+            setChecking(false);
+        }
+    };
+
+    // lock screen picture
+    const [picture, setPicture] = useState<ILockScreenPicture | null>(null);
+    const [preview, setPreview] = useState<string | null>(null);
+    const [lockResult, setLockResult] = useState<{ ok: boolean; message: string; path: string } | null>(null);
+    const [busy, setBusy] = useState(false);
+
+    const newPicture = async () => {
+        try {
+            const pic = await renderLockScreen();
+            setPicture(pic);
+            setPreview(pic.canvas.toDataURL("image/jpeg", 0.85));
+        } catch (e) {
+            setLockResult({ ok: false, message: String(e), path: "" });
+        }
+    };
+    useEffect(() => {
+        newPicture();
+    }, []);
+
+    const setAsLockScreen = async () => {
+        setBusy(true);
+        try {
+            setLockResult(await applyLockScreen(picture ?? undefined));
+        } catch (e) {
+            setLockResult({ ok: false, message: String(e), path: "" });
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const toggle = <K extends keyof ICompanionSettings>(key: K, value: ICompanionSettings[K]) => {
         const next = { ...settings, [key]: value };
         setSettings(next);
@@ -120,7 +180,69 @@ function Companion() {
                         onChange={(v) => toggle("chattiness", v as ICompanionSettings["chattiness"])}
                     />
                 </Group>
+                <Divider my="sm" />
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                    <div>
+                        <Text>Dress for the weather ☔</Text>
+                        <Text maw={420} fz="xs" c="dimmed">
+                            Umbrella when it rains, shades when it's sunny, a beanie when it's cold. Uses Open-Meteo (free, no account); only your city name is sent.
+                        </Text>
+                        {settings.weather && (
+                            <Group gap="xs" mt="xs" align="flex-end">
+                                <TextInput size="xs" w={180} placeholder="Your city, e.g. Pune" value={city}
+                                    onChange={(e) => setCity(e.currentTarget.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && city.trim() && checkWeather(city).then((ok) => ok && toggle("weatherCity", city.trim()))} />
+                                <Button size="xs" variant="light" loading={checking} disabled={!city.trim()}
+                                    onClick={() => checkWeather(city).then((ok) => ok && toggle("weatherCity", city.trim()))}>
+                                    Save & check
+                                </Button>
+                            </Group>
+                        )}
+                        {settings.weather && weather && !weatherError && (
+                            <Text fz="sm" mt={6}>{weatherIcon(weather.code)} {Math.round(weather.temperature)}° in {weather.place}</Text>
+                        )}
+                        {settings.weather && weatherError && <Text fz="xs" c="red" mt={6}>{weatherError}</Text>}
+                    </div>
+                    <Switch size="lg" checked={settings.weather} onChange={(e) => toggle("weather", e.currentTarget.checked)} />
+                </Group>
             </div>
+
+            <Paper withBorder radius="md" p="md">
+                <Group justify="space-between" wrap="nowrap" align="flex-start">
+                    <div>
+                        <Text fw={600}>Lock screen picture 🔒</Text>
+                        <Text maw={430} fz="xs" c="dimmed">
+                            Windows doesn't let apps move on the lock screen, so your pet poses for a picture instead,
+                            in its current outfit, with a new line each time.
+                        </Text>
+                    </div>
+                    <Stack gap={2} align="flex-end">
+                        <Switch size="md" checked={settings.lockScreen} onChange={(e) => toggle("lockScreen", e.currentTarget.checked)} />
+                        <Text fz={10} c="dimmed">refresh every 3 h</Text>
+                    </Stack>
+                </Group>
+                {preview && <Image src={preview} radius="sm" mt="sm" alt="Lock screen preview" style={{ border: "1px solid var(--mantine-color-default-border)" }} />}
+                <Group gap="xs" mt="sm">
+                    <Button size="xs" variant="light" onClick={newPicture}>New line ✨</Button>
+                    <Button size="xs" loading={busy} onClick={setAsLockScreen}>Set as lock screen</Button>
+                    {lockResult?.path && (
+                        <Button size="xs" variant="subtle" onClick={() => invoke("open_folder", { path: lockResult.path.replace(/[\\/][^\\/]+$/, "") })}>
+                            Open folder
+                        </Button>
+                    )}
+                </Group>
+                {lockResult?.ok && <Text fz="xs" c="teal" mt={6}>Done! Press Win+L to see it 🔒</Text>}
+                {lockResult && !lockResult.ok && (
+                    <Text fz="xs" c="orange" mt={6}>
+                        {lockResult.message}. The picture is saved in Pictures\WindowPet: open{" "}
+                        <Text span fz="xs" c="blue" style={{ cursor: "pointer", textDecoration: "underline" }}
+                            onClick={() => invoke("open_folder", { path: "ms-settings:lockscreen" })}>
+                            lock screen settings
+                        </Text>
+                        , choose "Picture" and browse to it.
+                    </Text>
+                )}
+            </Paper>
 
             <Paper withBorder radius="md" p="md">
                 <Text fw={600} mb={4}>What your pet sees right now</Text>
@@ -153,6 +275,14 @@ function Companion() {
                                     ? `${status.media.playing ? "▶ playing" : "⏸ paused"}: ${status.media.title || "(no title)"}${status.media.artist ? ` · ${status.media.artist}` : ""} (${status.media.app || "?"})`
                                     : "nothing playing"}
                                 {status.media.playing && (detected === "movie" && !isMusicContext(status) ? " → movie time 🍿" : " → music 🎵")}
+                            </Text>
+                        </Group>
+                        <Group gap="xs" wrap="nowrap">
+                            <Text fz="sm" w={110} c="dimmed">PC</Text>
+                            <Text fz="sm">
+                                {status.battery >= 0 ? `${status.charging ? "⚡" : "🔋"} ${status.battery}%` : "🔌 no battery"}
+                                {" · "}CPU {Math.round(status.cpu)}%{" · "}RAM {status.memory}%
+                                {" · "}{status.online ? "🌐 online" : "📡 offline"}
                             </Text>
                         </Group>
                     </SimpleGrid>

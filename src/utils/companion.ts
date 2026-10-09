@@ -85,6 +85,43 @@ export function isBirthday(wardrobe: IWardrobeSettings = loadWardrobe(), now = n
     return wardrobe.birthday.trim() === today;
 }
 
+// ---------- weather ----------
+
+export const WEATHER_KEY = "windowpet.weather";
+
+export interface IWeather {
+    place: string;
+    temperature: number;
+    code: number;
+    is_day: boolean;
+    // when it was fetched (epoch ms)
+    at?: number;
+}
+
+export type WeatherKind = "storm" | "rain" | "snow" | "hot" | "sunny" | "cold" | "cloudy";
+
+// WMO weather codes -> what the pet cares about
+export function weatherKind(w: IWeather): WeatherKind {
+    const c = w.code;
+    if (c >= 95) return "storm";
+    if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return "rain";
+    if ((c >= 71 && c <= 77) || c === 85 || c === 86) return "snow";
+    if (w.temperature <= 12) return "cold";
+    if (c <= 1 && w.is_day) return w.temperature >= 30 ? "hot" : "sunny";
+    return "cloudy";
+}
+
+export function loadWeather(): IWeather | null {
+    const w = read<IWeather | null>(WEATHER_KEY, null);
+    // forget readings older than 3 hours
+    if (!w || !w.at || Date.now() - w.at > 3 * 3600000) return null;
+    return w;
+}
+
+export function saveWeather(w: IWeather | null): void {
+    write(WEATHER_KEY, w ? { ...w, at: Date.now() } : null);
+}
+
 // what the pet actually wears today
 export function effectiveWardrobe(now = new Date()): IWardrobe {
     const w = loadWardrobe();
@@ -98,6 +135,14 @@ export function effectiveWardrobe(now = new Date()): IWardrobe {
     if (w.seasonal) {
         if (isBirthday(w, now)) outfit.hat = "party";
         else if (now.getMonth() === 11 && (!w.hat || w.hat === "none")) outfit.hat = "santa";
+    }
+    // dressed for the weather (only adds things, never replaces what you picked)
+    const weather = loadCompanion().weather ? loadWeather() : null;
+    if (weather) {
+        const kind = weatherKind(weather);
+        if (kind === "rain" || kind === "storm") outfit.umbrella = true;
+        if ((kind === "sunny" || kind === "hot") && (!outfit.glasses || outfit.glasses === "none")) outfit.glasses = "sunglasses";
+        if ((kind === "cold" || kind === "snow") && (!outfit.hat || outfit.hat === "none")) outfit.hat = "beanie";
     }
     return outfit;
 }
@@ -147,6 +192,13 @@ export interface ICompanionSettings {
     nudges: boolean;
     // how often it says casual things (song names, "Game time!"…); important messages always show
     chattiness: "quiet" | "normal" | "chatty";
+    // battery, CPU/RAM, internet and lock/unlock reactions
+    pcReactions: boolean;
+    // dresses for the weather in your city
+    weather: boolean;
+    weatherCity: string;
+    // keeps the Windows lock screen picture fresh with a new line every few hours
+    lockScreen: boolean;
 }
 
 export const DEFAULT_COMPANION: ICompanionSettings = {
@@ -158,6 +210,10 @@ export const DEFAULT_COMPANION: ICompanionSettings = {
     awayDetection: true,
     nudges: true,
     chattiness: "normal",
+    pcReactions: true,
+    weather: false,
+    weatherCity: "",
+    lockScreen: false,
 };
 
 export function loadCompanion(): ICompanionSettings {
@@ -191,6 +247,13 @@ export interface ISystemStatus {
     app: string;
     title: string;
     media: { playing: boolean; title: string; artist: string; app: string };
+    // -1 = no battery
+    battery: number;
+    charging: boolean;
+    cpu: number;
+    memory: number;
+    online: boolean;
+    locked: boolean;
 }
 
 // which activity goes with which app; ".exe" entries match the program, others the window title
