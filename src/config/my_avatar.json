@@ -89,6 +89,7 @@
                 "sad": "CommandOrControl+Alt+E",
                 "attention": "CommandOrControl+Alt+T",
                 "feed": "CommandOrControl+Alt+C",
+                "hide": "CommandOrControl+Alt+X",
                 "normal": "CommandOrControl+Alt+N"
             },
             "apps": {

@@ -55,6 +55,7 @@ const ACTION_NAMES: { [action: string]: string } = {
     sad: "Emotional mood 🥺",
     attention: "Attention-seeking mood 👀",
     feed: "Give a snack 🍪",
+    hide: "Hide / show pets 🙈",
     normal: "Back to normal",
 };
 

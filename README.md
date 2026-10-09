@@ -50,6 +50,9 @@
 - Wellbeing nudges: drink water, stretch, eye breaks (paused while you're away or focusing)
 - Reminders you set in Settings, delivered by the pet until you click it
 
+**Out of the way when you need it**
+- 🙈 Hide the pets instantly with `Ctrl+Alt+X` or *Hide pets* in the tray menu (meetings, screen sharing), and bring them back right where they were. Hidden pets use no CPU.
+
 **Make it yours**
 - 👕 Wardrobe: hats, glasses, headphones, t-shirts with prints; Santa hat in December, party hat on your birthday
 - Turn every feature on/off and choose how chatty it is (Settings → Companion)
@@ -67,7 +70,7 @@ Work from any app. Pressing a mode's key again turns it off.
 | `Ctrl+Alt+M` | Movie night | `Ctrl+Alt+C` | Give a snack 🍪 |
 | `Ctrl+Alt+D` | Dance | `Ctrl+Alt+F` | Follow the cursor on/off |
 | `Ctrl+Alt+H` | Say hi | `Ctrl+Alt+P` | Focus timer start/stop |
-| `Ctrl+Alt+N` | Back to normal | | |
+| `Ctrl+Alt+N` | Back to normal | `Ctrl+Alt+X` | Hide / show pets 🙈 |
 
 ## 📥 Install
 

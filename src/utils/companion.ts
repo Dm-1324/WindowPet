@@ -237,6 +237,7 @@ export const DEFAULT_HOTKEYS: { [action: string]: string } = {
     sad: "CommandOrControl+Alt+E",
     attention: "CommandOrControl+Alt+T",
     feed: "CommandOrControl+Alt+C",
+    hide: "CommandOrControl+Alt+X",
     normal: "CommandOrControl+Alt+N",
 };
 

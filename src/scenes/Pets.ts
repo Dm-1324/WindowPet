@@ -232,6 +232,8 @@ export default class Pets extends Phaser.Scene {
     private weatherKindNow: string | null = loadWeather() ? weatherKind(loadWeather()!) : null;
     private lastLockScreenAt: number = 0;
     private unlockedAt: number = -Infinity;
+    // hidden from the tray or Ctrl+Alt+X: the window is invisible and the game is paused
+    private hidden: boolean = false;
     private onStorage = (e: StorageEvent) => {
         if (e.key === WARDROBE_KEY) this.wardrobeChanged();
         if (e.key === COMPANION_KEY) this.companionChanged();
@@ -286,6 +288,7 @@ export default class Pets extends Phaser.Scene {
         yum: ["Yum! 😋", "Nom nom nom 🍪", "Delicious! 😋", "Thanks for the snack! 💕"],
         foodSpotted: ["Ooh, a snack! 😮", "Food?! 🤤", "Is that for me?! 😍"],
         song: ["🎵 Ooh, I like this one!", "🎶 Banger!", "🎵 Let's groove!", "🎶 Good choice!"],
+        peekaboo: ["Peekaboo! 👋 I'm back", "Ta-da! ✨ Did you miss me?", "I'm baaack! 😊"],
         followOn: ["I'll follow you! 🐾", "Lead the way! 🐾"],
         followOff: ["Okay, I'll hang out here 🙂", "Staying put! 🐾"],
         focusStart: ["Focus time! 🍅 Let's go", "Deep work mode 🍅", "Focus! I'll work with you 🍅"],
@@ -382,6 +385,11 @@ export default class Pets extends Phaser.Scene {
 
         // companion features: what the computer is doing, outfits, reminders
         this.time.addEvent({ delay: 2000, loop: true, callback: () => this.pollSystem() });
+
+        // hide / show without closing (tray menu or Ctrl+Alt+X)
+        listen<boolean>("pets-visibility", (event) => this.setHidden(!event.payload)).then((unlisten) =>
+            this.events.once("destroy", unlisten)
+        );
         // weather every 5 min (fetches at most every 20), lock screen picture checks every 10 min
         this.time.delayedCall(3000, () => this.refreshWeather());
         this.time.addEvent({ delay: 5 * 60000, loop: true, callback: () => this.refreshWeather() });
@@ -2598,6 +2606,23 @@ export default class Pets extends Phaser.Scene {
         this.showBubble(pet, this.pick(this.LINES.yum));
     }
 
+    setHidden(hide: boolean): void {
+        if (hide === this.hidden) return;
+        this.hidden = hide;
+        if (hide) {
+            this.forEachAvatar((pet) => this.clearBubble(pet));
+            // nothing to draw: pause the game loop so it uses no CPU
+            this.game.loop.sleep();
+            return;
+        }
+        this.game.loop.wake();
+        this.lastInteraction = this.time.now;
+        this.forEachAvatar((pet) => {
+            this.showBubble(pet, this.pick(this.LINES.peekaboo), 3000, this.IMPORTANT);
+            if (this.isFree(pet)) this.time.delayedCall(300, () => this.playReaction(pet, "greet", true));
+        });
+    }
+
     // ---------- keyboard shortcuts ----------
 
     async registerHotkeys(): Promise<void> {
@@ -2626,6 +2651,12 @@ export default class Pets extends Phaser.Scene {
     }
 
     onHotkey(action: string): void {
+        if (action === "hide") {
+            invoke("toggle_pets_visibility").catch((err) => error(`Hide pets: ${err}`));
+            return;
+        }
+        // while hidden, the other shortcuts wait until it's back
+        if (this.hidden) return;
         this.lastInteraction = this.time.now;
         if (action === "focus") {
             this.focus.phase ? this.stopFocus() : this.startFocus();
