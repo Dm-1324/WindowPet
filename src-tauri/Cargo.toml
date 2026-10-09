@@ -1,6 +1,6 @@
 [package]
 name = "window_pet"
-version = "1.2.0"
+version = "1.2.1"
 description = "Window Pet"
 authors = ["SeakMengs"]
 license = "MIT"

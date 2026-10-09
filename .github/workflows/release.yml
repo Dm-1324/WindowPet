@@ -45,6 +45,8 @@ jobs:
               with:
                   # __VERSION__ is replaced with the app version from tauri.conf.json
                   tagName: v__VERSION__
+                  # in-app updates use the setup.exe (NSIS) package, the same one people install with
+                  updaterJsonPreferNsis: true
                   releaseName: "WindowPet v__VERSION__ (custom avatar edition)"
                   releaseBody: |
                       Desktop pet with a custom animated avatar that walks on your taskbar.
